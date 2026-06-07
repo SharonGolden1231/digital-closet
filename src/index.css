@@ -1,0 +1,171 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink: #0f0e0d;
+  --parchment: #f7f4ee;
+  --warm-grey: #e8e3d9;
+  --mid-grey: #b5afa4;
+  --faint: #f0ece4;
+  --emerald: #1a3028;
+  --emerald-mid: #2a4f3e;
+  --emerald-bright: #3d7a5f;
+  --gold: #b8956a;
+  --gold-light: #d4b08c;
+  --error-ink: #7a2424;
+  --error-bg: #fdf2f2;
+  --success-bg: #edf5f0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--parchment);
+  color: var(--ink);
+  font-family: "DM Sans", system-ui, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+}
+
+.serif {
+  font-family: "DM Serif Display", Georgia, serif;
+}
+.mono {
+  font-family: "DM Mono", monospace;
+}
+
+::-webkit-scrollbar {
+  width: 3px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--warm-grey);
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+@keyframes waveBar {
+  0%,
+  100% {
+    transform: scaleY(0.2);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+@keyframes scanLine {
+  0% {
+    top: 0%;
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.fade-up {
+  animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.fade-in {
+  animation: fadeIn 0.3s ease forwards;
+}
+.spin-anim {
+  animation: spin 1s linear infinite;
+}
+.pulse-anim {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.float-anim {
+  animation: float 3s ease-in-out infinite;
+}
+
+.wave-bar {
+  display: inline-block;
+  width: 3px;
+  height: 16px;
+  background: var(--emerald-bright);
+  border-radius: 2px;
+  transform-origin: center;
+  animation: waveBar 0.7s ease-in-out infinite;
+}
+.wave-bar:nth-child(1) {
+  animation-delay: 0s;
+}
+.wave-bar:nth-child(2) {
+  animation-delay: 0.1s;
+}
+.wave-bar:nth-child(3) {
+  animation-delay: 0.2s;
+}
+.wave-bar:nth-child(4) {
+  animation-delay: 0.1s;
+}
+.wave-bar:nth-child(5) {
+  animation-delay: 0s;
+}
+
+.scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--emerald-bright),
+    transparent
+  );
+  animation: scanLine 1.8s ease-in-out infinite;
+}
+
+input[type="file"] {
+  display: none;
+}
