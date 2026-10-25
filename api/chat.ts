@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { requireUser, checkChatInput } from "./_lib/gate.js";
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -30,7 +31,13 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
+        const userId = await requireUser(req, res, "chat");
+    if (!userId) return;
     const { messages, closetContext } = req.body;
+     const inputError = checkChatInput(messages, closetContext);
+    if (inputError) {
+      return res.status(400).json({ error: inputError });
+    }
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: "Missing messages" });
@@ -55,7 +62,7 @@ export default async function handler(req: any, res: any) {
     console.error("Chat error:", error);
     return res.status(500).json({
       error: "Chat failed",
-      detail: error.message,
+      
     });
   }
 }

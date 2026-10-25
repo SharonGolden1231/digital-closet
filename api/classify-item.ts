@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { requireUser, validImage } from "./_lib/gate.js";
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -63,9 +64,11 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
+        const userId = await requireUser(req, res, "classify-item");
+    if (!userId) return;
     const { imageBase64, mediaType } = req.body;
 
-    if (!imageBase64 || !mediaType) {
+    if (!validImage(imageBase64, mediaType)) {
       return res.status(400).json({ error: "Missing image data" });
     }
 
@@ -106,7 +109,6 @@ export default async function handler(req: any, res: any) {
     console.error("Classify error:", error);
     return res.status(500).json({
       error: "Classification failed",
-      detail: error.message,
     });
   }
 }

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-
+import { requireUser, validImage } from "./_lib/gate.js";
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
@@ -163,9 +163,11 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
+        const userId = await requireUser(req, res, "tag-scan");
+    if (!userId) return;
     const { imageBase64, mediaType } = req.body;
 
-    if (!imageBase64 || !mediaType) {
+    if (!validImage(imageBase64, mediaType)) {
       return res.status(400).json({ error: "Missing image data" });
     }
 
@@ -260,7 +262,7 @@ export default async function handler(req: any, res: any) {
       status: "unreadable",
       message: "Scan failed — try better lighting or a closer shot.",
       error: "Tag scan failed",
-      detail: error.message,
+      
     });
   }
 }
