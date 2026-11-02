@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import {
   Camera,
   Tag,
@@ -18,6 +18,7 @@ import {
   ExternalLink,
   Upload,
   Scan,
+  LogOut,
 } from "lucide-react";
 import type {
   ClosetItem,
@@ -27,6 +28,8 @@ import type {
   Tab,
   Channel,
 } from "./types";
+import { supabase, authConfigured } from "./lib/supabase";
+import { authFetch } from "./lib/authFetch";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -351,10 +354,39 @@ function buildShopSearchUrl(query: string) {
   return "https://www.google.com/search?q=" + encodeURIComponent(query) + "&tbm=shop";
 }
 
-// ─── Onboarding ───────────────────────────────────────────────────────────────
+// ─── Login ────────────────────────────────────────────────────────────────────
 
-function OnboardScreen({ onEnter }: { onEnter: (name: string) => void }) {
-  const [name, setName] = useState("");
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    if (busy || !email.trim() || !password) return;
+    if (!authConfigured) {
+      setError("Sign-in isn't set up on this site yet.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: password,
+      });
+      if (signInError) {
+        setError(
+          /invalid/i.test(signInError.message)
+            ? "Incorrect email or password."
+            : "Couldn't sign in — check your connection and try again."
+        );
+      }
+    } catch {
+      setError("Couldn't sign in — check your connection and try again.");
+    }
+    setBusy(false);
+  };
 
   return (
     <div
@@ -383,20 +415,25 @@ function OnboardScreen({ onEnter }: { onEnter: (name: string) => void }) {
             </p>
           </div>
         </div>
-        <div className="space-y-3">
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+        >
           <label
             className="text-xs uppercase tracking-widest font-medium block"
             style={{ color: "#B8956A" }}
           >
-            Your Name
+            Email
           </label>
           <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && name.trim()) onEnter(name.trim());
-            }}
-            placeholder="Enter to begin"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+            autoComplete="username"
             autoFocus
             className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
             style={{
@@ -405,17 +442,42 @@ function OnboardScreen({ onEnter }: { onEnter: (name: string) => void }) {
               color: "#F7F4EE",
             }}
           />
-          <button
-            onClick={() => {
-              if (name.trim()) onEnter(name.trim());
+          <label
+            className="text-xs uppercase tracking-widest font-medium block"
+            style={{ color: "#B8956A" }}
+          >
+            Password
+          </label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Your password"
+            autoComplete="current-password"
+            className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
+            style={{
+              background: "rgba(255,255,255,0.07)",
+              border: "1px solid rgba(61,122,95,0.4)",
+              color: "#F7F4EE",
             }}
-            disabled={!name.trim()}
+          />
+          {error && (
+            <p className="text-xs" style={{ color: "#F5B5B5" }}>
+              {error}
+            </p>
+          )}
+          <button
+            type="submit"
+            disabled={busy || !email.trim() || !password}
             className="w-full py-3 rounded-xl text-sm font-medium transition-all disabled:opacity-40"
             style={{ background: "#B8956A", color: "#1A3028" }}
           >
-            Enter Closet →
+            {busy ? "Signing in…" : "Sign in →"}
           </button>
-        </div>
+          <p className="text-xs text-center pt-1" style={{ color: "rgba(181,175,164,0.7)" }}>
+            Invite-only. Ask for access if you don't have an account.
+          </p>
+        </form>
       </div>
     </div>
   );
@@ -451,7 +513,7 @@ function ChannelA({
 
       try {
         const base64 = await fileToBase64(file);
-        const res = await fetch("/api/classify-item", {
+        const res = await authFetch("/api/classify-item", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -735,7 +797,7 @@ function ChannelB({
 
       try {
         const { base64, mediaType } = await compressImage(file);
-        const res = await fetch("/api/tag-scan", {
+        const res = await authFetch("/api/tag-scan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -745,6 +807,18 @@ function ChannelB({
         });
 
         const data: TagScanResponse = await res.json();
+
+        // Errors from the access gate (daily limit, bad request) carry only an
+        // "error" field. Show them in the existing red error box.
+        if (!res.ok && !data.status) {
+          const errText = (data as any).error || "Scan failed — try again.";
+          setResult({ status: "unreadable", message: errText } as TagScanResponse);
+          setMessage(errText);
+          setPhase("result");
+          onLog("tag_scan", "API_ERROR", errText);
+          return;
+        }
+
         setResult(data);
         setMessage(data.message || "Scan completed, but the result was unexpectedly empty — try again.");
         setPhase("result");
@@ -1610,7 +1684,7 @@ function StylistChat({ items }: { items: ClosetItem[] }) {
     setLoading(true);
 
     try {
-      const res = await fetch("/api/chat", {
+      const res = await authFetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1619,7 +1693,10 @@ function StylistChat({ items }: { items: ClosetItem[] }) {
         }),
       });
       const data = await res.json();
-      setMessages((prev) => prev.concat([{ role: "assistant", content: data.message }]));
+      const reply: string = res.ok
+        ? data.message
+        : data.error || "I'm having trouble connecting — try again in a moment.";
+      setMessages((prev) => prev.concat([{ role: "assistant", content: reply }]));
     } catch {
       setMessages((prev) =>
         prev.concat([{ role: "assistant", content: "I'm having trouble connecting — try again in a moment." }])
@@ -1816,6 +1893,32 @@ export default function App() {
   const [logs, setLogs] = useState<AdminLog[]>([]);
   const [tab, setTab] = useState<Tab>("closet");
   const [channel, setChannel] = useState<Channel>("A");
+  const [authReady, setAuthReady] = useState(false);
+
+  // The signed-in user comes from Supabase. When the session ends (sign-out or
+  // an expired login), clear everything held in memory so the next person who
+  // signs in on this browser never sees the previous user's closet.
+  useEffect(() => {
+    const displayName = (email?: string | null) =>
+      email ? email.split("@")[0] : null;
+
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(displayName(data.session?.user.email));
+      setAuthReady(true);
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(displayName(session?.user.email));
+      if (!session) {
+        setItems(SEED_ITEMS);
+        setLogs([]);
+        setTab("closet");
+        setChannel("A");
+      }
+    });
+
+    return () => sub.subscription.unsubscribe();
+  }, []);
 
   const addItem = (partial: Partial<ClosetItem>, imageUrl?: string) => {
     setItems((prev) =>
@@ -1836,7 +1939,8 @@ export default function App() {
           imageUrl: imageUrl,
           addedAt: new Date().toISOString(),
         },
-      ].concat(prev)
+        ...prev,
+      ]
     );
   };
 
@@ -1854,7 +1958,10 @@ export default function App() {
     );
   };
 
-  if (!user) return <OnboardScreen onEnter={setUser} />;
+  if (!authReady) {
+    return <div className="min-h-screen" style={{ background: "#1A3028" }} />;
+  }
+  if (!user) return <LoginScreen />;
 
   const CHANNELS_CONFIG = [
     { id: "A" as Channel, label: "Camera", sub: "AI Vision QC", Icon: Camera },
@@ -1913,6 +2020,15 @@ export default function App() {
                 <span className="hidden sm:inline">{n.label}</span>
               </button>
             ))}
+            <button
+              onClick={() => supabase.auth.signOut()}
+              title="Sign out"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-all"
+              style={{ color: "var(--mid-grey)" }}
+            >
+              <LogOut size={12} />
+              <span className="hidden sm:inline">Sign out</span>
+            </button>
           </nav>
         </div>
       </header>
