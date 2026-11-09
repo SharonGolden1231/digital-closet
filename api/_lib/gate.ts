@@ -7,6 +7,11 @@ const MAX_CHAT_MESSAGES = 30;
 const MAX_MESSAGE_CHARS = 8000;
 const MAX_CLOSET_CONTEXT_CHARS = 30000;
 
+// HTTP statuses from the auth service that mean "this token is not valid".
+// Anything else (network failure, 5xx, unknown) is a service problem, not a
+// bad login, and must NOT sign the user out.
+const TOKEN_REJECTED_STATUSES = [400, 401, 403, 404];
+
 function getAdminClient() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -38,7 +43,21 @@ export async function requireUser(
   }
 
   const { data, error } = await admin.auth.getUser(token);
-  if (error || !data?.user) {
+  if (error) {
+    const status = (error as any).status;
+    if (TOKEN_REJECTED_STATUSES.includes(status)) {
+      res.status(401).json({ error: "Session expired — please sign in again." });
+    } else {
+      // Auth service unreachable or failing. Deny the call, but with a 503 so
+      // the app keeps the user signed in and their closet intact.
+      console.error("Gate auth check failed:", error.message, status);
+      res.status(503).json({
+        error: "Sign-in service is temporarily unavailable — please try again in a moment.",
+      });
+    }
+    return null;
+  }
+  if (!data?.user) {
     res.status(401).json({ error: "Session expired — please sign in again." });
     return null;
   }
