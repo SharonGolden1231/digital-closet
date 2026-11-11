@@ -30,86 +30,10 @@ import type {
 } from "./types";
 import { supabase, authConfigured } from "./lib/supabase";
 import { authFetch } from "./lib/authFetch";
+import { saveItem, loadCloset, newItemId } from "./lib/closetSync";
+import type { AddMeta } from "./lib/closetSync";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const SEED_ITEMS: ClosetItem[] = [
-  {
-    id: "s1",
-    name: "Tailored Wool Blazer",
-    category: "Outerwear",
-    sub_category: "Blazer",
-    sub_category_confidence: "high",
-    colors: ["Charcoal", "Grey"],
-    pattern: "Solid",
-    fit: "Tailored",
-    brand: "Zara",
-    material: "Wool blend",
-    source_signals: ["brand_import"],
-    badge: "Imported from Zara",
-    addedAt: "2024-11-12T09:23:00Z",
-  },
-  {
-    id: "s2",
-    name: "Slim Black Denim",
-    category: "Bottom",
-    sub_category: "Jeans",
-    sub_category_confidence: "high",
-    colors: ["Black"],
-    pattern: "Solid",
-    fit: "Slim",
-    brand: "Uniqlo",
-    material: "98% Cotton 2% Elastane",
-    source_signals: ["tag_scan"],
-    badge: "Digitized via Tag",
-    addedAt: "2024-11-18T14:05:00Z",
-  },
-  {
-    id: "s3",
-    name: "Ivory Linen Blouse",
-    category: "Top",
-    sub_category: "Blouse",
-    sub_category_confidence: "high",
-    colors: ["Cream", "Beige"],
-    pattern: "Solid",
-    fit: "Relaxed",
-    brand: "Mango",
-    material: "100% Linen",
-    source_signals: ["image"],
-    badge: "Background Cleaned",
-    addedAt: "2024-12-02T11:40:00Z",
-  },
-  {
-    id: "s4",
-    name: "Camel Trench Coat",
-    category: "Outerwear",
-    sub_category: "Trench Coat",
-    sub_category_confidence: "high",
-    colors: ["Camel"],
-    pattern: "Solid",
-    fit: "Regular",
-    brand: "Zara",
-    material: "Polyester blend",
-    source_signals: ["tag_scan", "visual_search"],
-    badge: "Digitized via Tag",
-    addedAt: "2024-12-15T16:22:00Z",
-  },
-  {
-    id: "s5",
-    name: "Olive Cargo Trousers",
-    category: "Bottom",
-    sub_category: "Tailored Trousers",
-    sub_category_confidence: "low",
-    colors: ["Olive"],
-    pattern: "Solid",
-    fit: "Regular",
-    brand: "Nike",
-    material: "Cotton twill",
-    source_signals: ["image"],
-    badge: "Camera Upload",
-    addedAt: "2025-01-08T08:15:00Z",
-  },
-];
 
 const COLOR_HEX: Record<string, string> = {
   Black: "#2B2927",
@@ -250,10 +174,6 @@ const BRANDS = [
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
-function genId() {
-  return "i_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
-}
-
 function genLogId() {
   return "l_" + Date.now();
 }
@@ -325,18 +245,6 @@ function compressImage(file: File): Promise<{ base64: string; mediaType: string 
     };
 
     img.src = objectUrl;
-  });
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
   });
 }
 
@@ -489,13 +397,18 @@ function ChannelA({
   onAddItem,
   onLog,
 }: {
-  onAddItem: (item: Partial<ClosetItem>, imageUrl?: string) => void;
+  onAddItem: (
+    item: Partial<ClosetItem>,
+    imageUrl?: string,
+    meta?: AddMeta
+  ) => void;
   onLog: (method: string, exc: string, detail: string) => void;
 }) {
   const [phase, setPhase] = useState<"idle" | "loading" | "fail" | "success" | "done">("idle");
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
   const [result, setResult] = useState<ClassifyResponse | null>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback(
@@ -508,17 +421,20 @@ function ChannelA({
 
       const objectUrl = URL.createObjectURL(file);
       setPreview(objectUrl);
+      setPhotoFile(file);
       setPhase("loading");
       setMessage("Evaluating image quality…");
 
       try {
-        const base64 = await fileToBase64(file);
+        // Shrink the photo first (same step the tag scan uses) so a large
+        // phone photo cannot exceed the server's request size limit.
+        const { base64, mediaType } = await compressImage(file);
         const res = await authFetch("/api/classify-item", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             imageBase64: base64,
-            mediaType: file.type,
+            mediaType,
           }),
         });
 
@@ -577,7 +493,8 @@ function ChannelA({
         source_signals: ["image"],
         badge: "Camera Upload",
       },
-      preview || undefined
+      preview || undefined,
+      { file: photoFile || undefined, raw: result }
     );
     setPhase("done");
     setTimeout(() => {
@@ -779,7 +696,11 @@ function ChannelB({
   onAddItem,
   onLog,
 }: {
-  onAddItem: (item: Partial<ClosetItem>) => void;
+  onAddItem: (
+    item: Partial<ClosetItem>,
+    imageUrl?: string,
+    meta?: AddMeta
+  ) => void;
   onLog: (method: string, exc: string, detail: string) => void;
 }) {
   const [phase, setPhase] = useState<"idle" | "loading" | "result" | "done">("idle");
@@ -856,7 +777,7 @@ function ChannelB({
       material: c.material || (result.extracted && result.extracted.composition) || "",
       source_signals: ["tag_scan"],
       badge: "Digitized via Tag",
-    });
+    }, undefined, { raw: result });
     setPhase("done");
     setTimeout(() => {
       setPhase("idle");
@@ -1494,7 +1415,13 @@ function ChannelD({
 
 // ─── Closet Grid ──────────────────────────────────────────────────────────────
 
-function ClosetGrid({ items }: { items: ClosetItem[] }) {
+function ClosetGrid({
+  items,
+  photoUrls,
+}: {
+  items: ClosetItem[];
+  photoUrls: Record<string, string>;
+}) {
   const [filter, setFilter] = useState("All");
   const [selected, setSelected] = useState<ClosetItem | null>(null);
 
@@ -1592,7 +1519,7 @@ function ClosetGrid({ items }: { items: ClosetItem[] }) {
             </button>
             {selected.imageUrl ? (
               <img
-                src={selected.imageUrl}
+                src={photoUrls[selected.id] || selected.imageUrl}
                 alt={selected.name}
                 className="w-full rounded-2xl object-cover mb-4"
                 style={{ height: 200 }}
@@ -1662,18 +1589,16 @@ function StylistChat({ items }: { items: ClosetItem[] }) {
     {
       role: "assistant",
       content:
-        "Good to meet you. I've looked through your " +
-        items.length +
-        " pieces — you've got a strong neutral foundation to work with. What are you dressing for?",
+        items.length === 0
+          ? "Good to meet you. Your closet is empty so far — add a few pieces and I'll start styling with them. What are you dressing for?"
+          : "Good to meet you. I've looked through your " +
+            items.length +
+            " pieces — you've got a strong neutral foundation to work with. What are you dressing for?",
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
-
-  const closetContext = items
-    .map((i) => "- " + i.name + " (" + i.category + ", " + i.colors.join("/") + ", " + i.brand + ")")
-    .join("\n");
 
   const send = async () => {
     if (!input.trim() || loading) return;
@@ -1689,7 +1614,6 @@ function StylistChat({ items }: { items: ClosetItem[] }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: newMessages,
-          closetContext: closetContext,
         }),
       });
       const data = await res.json();
@@ -1889,11 +1813,15 @@ function Analytics({ items, logs }: { items: ClosetItem[]; logs: AdminLog[] }) {
 
 export default function App() {
   const [user, setUser] = useState<string | null>(null);
-  const [items, setItems] = useState<ClosetItem[]>(SEED_ITEMS);
+  const [items, setItems] = useState<ClosetItem[]>([]);
   const [logs, setLogs] = useState<AdminLog[]>([]);
   const [tab, setTab] = useState<Tab>("closet");
   const [channel, setChannel] = useState<Channel>("A");
   const [authReady, setAuthReady] = useState(false);
+  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const [saveState, setSaveState] = useState<Record<string, "saving" | "failed">>({});
+  const [closetError, setClosetError] = useState("");
+  const pendingRef = useRef<Map<string, { item: ClosetItem; meta: AddMeta }>>(new Map());
 
   // The signed-in user comes from Supabase. When the session ends (sign-out or
   // an expired login), clear everything held in memory so the next person who
@@ -1910,7 +1838,11 @@ export default function App() {
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(displayName(session?.user.email));
       if (!session) {
-        setItems(SEED_ITEMS);
+        setItems([]);
+        setPhotoUrls({});
+        setSaveState({});
+        setClosetError("");
+        pendingRef.current.clear();
         setLogs([]);
         setTab("closet");
         setChannel("A");
@@ -1920,28 +1852,84 @@ export default function App() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  const addItem = (partial: Partial<ClosetItem>, imageUrl?: string) => {
-    setItems((prev) =>
-      [
-        {
-          id: genId(),
-          name: partial.name || "Item",
-          category: partial.category || "Top",
-          sub_category: partial.sub_category || "",
-          sub_category_confidence: partial.sub_category_confidence || "high",
-          colors: partial.colors || ["Black"],
-          pattern: partial.pattern || "Solid",
-          fit: partial.fit !== undefined ? partial.fit : null,
-          brand: partial.brand || "Unknown",
-          material: partial.material || "",
-          source_signals: partial.source_signals || ["manual"],
-          badge: partial.badge || "Manually Cataloged",
-          imageUrl: imageUrl,
-          addedAt: new Date().toISOString(),
-        },
-        ...prev,
-      ]
-    );
+  // Load the saved closet from the server whenever someone signs in.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    setClosetError("");
+    loadCloset()
+      .then(({ items: loaded, photoUrls: urls }) => {
+        if (cancelled) return;
+        const loadedIds = new Set(loaded.map((i) => i.id));
+        setItems((prev) => [
+          ...prev.filter((i) => pendingRef.current.has(i.id) && !loadedIds.has(i.id)),
+          ...loaded,
+        ]);
+        setPhotoUrls(urls);
+      })
+      .catch(() => {
+        if (!cancelled) setClosetError("Couldn't load your saved closet. Please refresh the page.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  // Ask before closing the tab while an item is still being saved.
+  useEffect(() => {
+    if (Object.keys(saveState).length === 0) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [saveState]);
+
+  // Saves one item to the server. Failed saves stay in memory with a Retry
+  // button, so the user never silently loses work.
+  const persist = async (item: ClosetItem, meta: AddMeta) => {
+    pendingRef.current.set(item.id, { item, meta });
+    setSaveState((prev) => ({ ...prev, [item.id]: "saving" }));
+    try {
+      await saveItem(item, meta);
+      pendingRef.current.delete(item.id);
+      setSaveState((prev) => {
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
+    } catch (err: any) {
+      setSaveState((prev) => ({ ...prev, [item.id]: "failed" }));
+      addLog("save_item", "SAVE_FAILED", String(err?.message || "Save failed"));
+    }
+  };
+
+  const retryUnsaved = () => {
+    pendingRef.current.forEach(({ item, meta }) => {
+      void persist(item, meta);
+    });
+  };
+
+  const addItem = (partial: Partial<ClosetItem>, imageUrl?: string, meta?: AddMeta) => {
+    const item: ClosetItem = {
+      id: newItemId(),
+      name: partial.name || "Item",
+      category: partial.category || "Top",
+      sub_category: partial.sub_category || "",
+      sub_category_confidence: partial.sub_category_confidence || "high",
+      colors: partial.colors || ["Black"],
+      pattern: partial.pattern || "Solid",
+      fit: partial.fit !== undefined ? partial.fit : null,
+      brand: partial.brand || "Unknown",
+      material: partial.material || "",
+      source_signals: partial.source_signals || ["manual"],
+      badge: partial.badge || "Manually Cataloged",
+      imageUrl: imageUrl,
+      addedAt: new Date().toISOString(),
+    };
+    setItems((prev) => [item, ...prev]);
+    void persist(item, meta || {});
   };
 
   const addLog = (method: string, exception: string, detail: string) => {
@@ -2033,6 +2021,27 @@ export default function App() {
         </div>
       </header>
 
+      {(closetError || Object.keys(saveState).length > 0) && (
+        <div className="max-w-2xl w-full mx-auto px-4 pt-3">
+          <div
+            className="rounded-xl px-4 py-3 text-xs flex items-center justify-between gap-3"
+            style={{ background: "#FDF3E3", border: "1px solid #E8CFA0", color: "#6B4E16" }}
+          >
+            <span>
+              {closetError ||
+                (Object.values(saveState).includes("failed")
+                  ? "Some items are not saved yet — check your connection."
+                  : "Saving…")}
+            </span>
+            {!closetError && Object.values(saveState).includes("failed") && (
+              <button onClick={retryUnsaved} className="underline font-medium">
+                Retry
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-6 pb-8">
         <div className="mb-5">
           <h2 className="serif text-2xl" style={{ color: "var(--emerald)" }}>
@@ -2046,7 +2055,7 @@ export default function App() {
         {tab === "closet" && (
           <>
             <Analytics items={items} logs={logs} />
-            <ClosetGrid items={items} />
+            <ClosetGrid items={items} photoUrls={photoUrls} />
           </>
         )}
 

@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { requireUser, checkChatInput } from "./_lib/gate.js";
+import { requireUser, checkChatInput, getBearerToken } from "./_lib/gate.js";
+import { loadClosetContext } from "./_lib/closet.js";
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -33,8 +34,8 @@ export default async function handler(req: any, res: any) {
   try {
         const userId = await requireUser(req, res, "chat");
     if (!userId) return;
-    const { messages, closetContext } = req.body;
-     const inputError = checkChatInput(messages, closetContext);
+    const { messages } = req.body;
+    const inputError = checkChatInput(messages, undefined);
     if (inputError) {
       return res.status(400).json({ error: inputError });
     }
@@ -42,6 +43,10 @@ export default async function handler(req: any, res: any) {
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: "Missing messages" });
     }
+
+    // The closet summary is built on the server from the signed-in user's saved
+    // items, so it can't be forged or cut off by the browser.
+    const closetContext = await loadClosetContext(getBearerToken(req));
 
     const systemWithContext = closetContext
       ? `${STYLIST_SYSTEM_PROMPT}\n\n## USER'S CURRENT CLOSET:\n${closetContext}`

@@ -21,13 +21,19 @@ function getAdminClient() {
   });
 }
 
-// Verifies the login token, enforces the per-user daily cap, and records the
-// call. Returns the verified user id, or null after sending the error response.
-export async function requireUser(
+export function getBearerToken(req: any): string {
+  const header = String(req.headers?.authorization ?? "");
+  return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+}
+
+// Verifies the login token ONLY. It does not count against the AI cap and
+// records nothing. Used by routes that are not AI calls (saving a closet
+// item). Returns the verified user id and token, or null after sending the
+// error response.
+export async function verifyUser(
   req: any,
-  res: any,
-  endpoint: string
-): Promise<string | null> {
+  res: any
+): Promise<{ userId: string; token: string } | null> {
   const admin = getAdminClient();
   if (!admin) {
     console.error("Gate misconfigured: Supabase server settings are missing");
@@ -35,8 +41,7 @@ export async function requireUser(
     return null;
   }
 
-  const header = String(req.headers?.authorization ?? "");
-  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  const token = getBearerToken(req);
   if (!token) {
     res.status(401).json({ error: "Please sign in." });
     return null;
@@ -61,7 +66,26 @@ export async function requireUser(
     res.status(401).json({ error: "Session expired — please sign in again." });
     return null;
   }
-  const userId = data.user.id;
+  return { userId: data.user.id, token };
+}
+
+// Verifies the login token, enforces the per-user daily cap, and records the
+// call. Returns the verified user id, or null after sending the error response.
+export async function requireUser(
+  req: any,
+  res: any,
+  endpoint: string
+): Promise<string | null> {
+  const auth = await verifyUser(req, res);
+  if (!auth) return null;
+  const userId = auth.userId;
+
+  const admin = getAdminClient();
+  if (!admin) {
+    console.error("Gate misconfigured: Supabase server settings are missing");
+    res.status(500).json({ error: "Service unavailable" });
+    return null;
+  }
 
   const cap = Number(process.env.AI_DAILY_CAP) || DEFAULT_DAILY_CAP;
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
