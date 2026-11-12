@@ -1822,6 +1822,8 @@ export default function App() {
   const [saveState, setSaveState] = useState<Record<string, "saving" | "failed">>({});
   const [closetError, setClosetError] = useState("");
   const pendingRef = useRef<Map<string, { item: ClosetItem; meta: AddMeta }>>(new Map());
+  const inFlightRef = useRef<Set<string>>(new Set());
+  const saveFailLogRef = useRef<Map<string, string>>(new Map());
 
   // The signed-in user comes from Supabase. When the session ends (sign-out or
   // an expired login), clear everything held in memory so the next person who
@@ -1843,6 +1845,8 @@ export default function App() {
         setSaveState({});
         setClosetError("");
         pendingRef.current.clear();
+        inFlightRef.current.clear();
+        saveFailLogRef.current.clear();
         setLogs([]);
         setTab("closet");
         setChannel("A");
@@ -1889,6 +1893,8 @@ export default function App() {
   // Saves one item to the server. Failed saves stay in memory with a Retry
   // button, so the user never silently loses work.
   const persist = async (item: ClosetItem, meta: AddMeta) => {
+    if (inFlightRef.current.has(item.id)) return; // already being saved
+    inFlightRef.current.add(item.id);
     pendingRef.current.set(item.id, { item, meta });
     setSaveState((prev) => ({ ...prev, [item.id]: "saving" }));
     try {
@@ -1899,9 +1905,21 @@ export default function App() {
         delete next[item.id];
         return next;
       });
+      // The item is saved now, so its failure entry (if any) no longer counts.
+      const failLogId = saveFailLogRef.current.get(item.id);
+      if (failLogId) {
+        saveFailLogRef.current.delete(item.id);
+        setLogs((prev) => prev.filter((l) => l.id !== failLogId));
+      }
     } catch (err: any) {
       setSaveState((prev) => ({ ...prev, [item.id]: "failed" }));
-      addLog("save_item", "SAVE_FAILED", String(err?.message || "Save failed"));
+      // One entry per item, however many times a retry fails.
+      if (!saveFailLogRef.current.has(item.id)) {
+        const failLogId = addLog("save_item", "SAVE_FAILED", String(err?.message || "Save failed"));
+        saveFailLogRef.current.set(item.id, failLogId);
+      }
+    } finally {
+      inFlightRef.current.delete(item.id);
     }
   };
 
@@ -1932,11 +1950,12 @@ export default function App() {
     void persist(item, meta || {});
   };
 
-  const addLog = (method: string, exception: string, detail: string) => {
+  const addLog = (method: string, exception: string, detail: string): string => {
+    const logId = genLogId();
     setLogs((prev) =>
       [
         {
-          id: genLogId(),
+          id: logId,
           ts: new Date().toISOString(),
           method: method,
           exception: exception,
@@ -1944,6 +1963,7 @@ export default function App() {
         },
       ].concat(prev)
     );
+    return logId;
   };
 
   if (!authReady) {
