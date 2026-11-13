@@ -9,6 +9,15 @@ export type AddMeta = {
 };
 
 const BUCKET = "closet-private";
+
+// One outfit option from the stylist: real item ids from the closet, plus any
+// pieces the user does not own yet.
+export type Outfit = {
+  title: string;
+  note: string;
+  itemIds: string[];
+  missing: string[];
+};
 const PHOTO_MAX_SIDE = 1600;
 const PHOTO_QUALITY = 0.85;
 const THUMB_MAX_SIDE = 400;
@@ -161,16 +170,11 @@ function signalsOf(channel: string): string[] {
 
 // Loads the signed-in user's closet. Thumbnails feed the grid; full photos
 // are returned separately for the detail view.
-export async function loadCloset(): Promise<{
-  items: ClosetItem[];
-  photoUrls: Record<string, string>;
-}> {
+export async function loadCloset(): Promise<{ items: ClosetItem[] }> {
   const res = await authFetch("/api/items", { method: "GET" });
   if (!res.ok) throw new Error("Couldn't load your closet.");
   const body = await res.json();
-  const photoUrls: Record<string, string> = {};
   const items = ((body.items ?? []) as any[]).map((r) => {
-    if (r.photoUrl) photoUrls[r.id] = r.photoUrl;
     return {
       id: r.id,
       name: r.name ?? "Item",
@@ -191,7 +195,17 @@ export async function loadCloset(): Promise<{
       addedAt: r.created_at,
     } as ClosetItem;
   });
-  return { items, photoUrls };
+  return { items };
+}
+
+// The full-size photo for one item, fetched when the item is opened.
+export async function getPhotoUrl(id: string): Promise<string | null> {
+  const res = await authFetch(`/api/items?photo=${encodeURIComponent(id)}`, {
+    method: "GET",
+  });
+  if (!res.ok) return null;
+  const body = await res.json();
+  return typeof body.url === "string" ? body.url : null;
 }
 
 // Soft-removes an item (kept for a purge job, hidden from the closet).

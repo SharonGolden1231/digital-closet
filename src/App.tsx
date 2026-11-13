@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
   Camera,
   Tag,
@@ -30,8 +30,9 @@ import type {
 } from "./types";
 import { supabase, authConfigured } from "./lib/supabase";
 import { authFetch } from "./lib/authFetch";
-import { saveItem, loadCloset, newItemId } from "./lib/closetSync";
-import type { AddMeta } from "./lib/closetSync";
+import { saveItem, loadCloset, newItemId, getPhotoUrl } from "./lib/closetSync";
+import type { AddMeta, Outfit } from "./lib/closetSync";
+import { BUCKETS, bucketOf, bucketLabel, bucketAnchor, emojiFor } from "./lib/taxonomy";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1418,87 +1419,205 @@ function ChannelD({
 function ClosetGrid({
   items,
   photoUrls,
+  loadPhoto,
 }: {
   items: ClosetItem[];
   photoUrls: Record<string, string>;
+  loadPhoto: (id: string) => void;
 }) {
   const [filter, setFilter] = useState("All");
   const [selected, setSelected] = useState<ClosetItem | null>(null);
+  const [view, setViewState] = useState<"buckets" | "all">(() => {
+    try {
+      return localStorage.getItem("vestry.closetView") === "all" ? "all" : "buckets";
+    } catch {
+      return "buckets";
+    }
+  });
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  const setView = (v: "buckets" | "all") => {
+    setViewState(v);
+    try {
+      localStorage.setItem("vestry.closetView", v);
+    } catch {
+      /* the choice just isn't remembered */
+    }
+  };
+
+  // Opening an item fetches its full-size photo (the grid only loads thumbnails).
+  useEffect(() => {
+    if (selected) loadPhoto(selected.id);
+  }, [selected, loadPhoto]);
 
   const uniqueCats = Array.from(new Set(items.map((i) => i.category)));
   const allCats = ["All"].concat(uniqueCats);
   const shown = filter === "All" ? items : items.filter((i) => i.category === filter);
 
+  const groups = useMemo(
+    () =>
+      BUCKETS.map((bucket) => ({
+        bucket,
+        list: items.filter((i) => bucketOf(i.category, i.sub_category, i.name) === bucket),
+      })).filter((g) => g.list.length > 0),
+    [items]
+  );
+
+  const toggleBucket = (bucket: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(bucket)) next.delete(bucket);
+      else next.add(bucket);
+      return next;
+    });
+  };
+
+  const jumpTo = (bucket: (typeof BUCKETS)[number]) => {
+    setCollapsed((prev) => {
+      if (!prev.has(bucket)) return prev;
+      const next = new Set(prev);
+      next.delete(bucket);
+      return next;
+    });
+    setTimeout(() => {
+      const el = document.getElementById(bucketAnchor(bucket));
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  };
+
+  const renderCard = (item: ClosetItem) => {
+    const color = item.colors[0] ? COLOR_HEX[item.colors[0]] || "#9CA3AF" : "#9CA3AF";
+    const badgeStyle = getBadgeStyle(item.badge);
+    return (
+      <button
+        key={item.id}
+        onClick={() => setSelected(item)}
+        className="text-left rounded-2xl overflow-hidden transition-all"
+        style={{ background: "white", border: "1px solid var(--warm-grey)" }}
+      >
+        {item.imageUrl ? (
+          <img src={item.imageUrl} alt={item.name} className="w-full object-cover" style={{ height: 140 }} />
+        ) : (
+          <div
+            className="w-full flex items-center justify-center"
+            style={{ height: 140, background: color + "15", fontSize: 48 }}
+          >
+            {emojiFor(item.category, item.sub_category, item.name)}
+          </div>
+        )}
+        <div className="p-3">
+          <p className="text-xs font-medium truncate" style={{ color: "var(--ink)" }}>
+            {item.name}
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--mid-grey)" }}>
+            {item.brand}
+          </p>
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {item.colors.map((c) => (
+              <span
+                key={c}
+                className="w-3 h-3 rounded-full border"
+                style={{ background: COLOR_HEX[c] || "#ccc", borderColor: "var(--warm-grey)" }}
+                title={c}
+              />
+            ))}
+          </div>
+          <span className="text-xs px-1.5 py-0.5 rounded-full mt-1.5 inline-block" style={badgeStyle as any}>
+            {item.badge}
+          </span>
+        </div>
+      </button>
+    );
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
-        {allCats.map((c) => (
-          <button
-            key={c}
-            onClick={() => setFilter(c)}
-            className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full transition-all"
-            style={
-              filter === c
-                ? { background: "var(--emerald)", color: "#F7F4EE" }
-                : { background: "white", border: "1px solid var(--warm-grey)", color: "var(--mid-grey)" }
-            }
-          >
-            {c} ({c === "All" ? items.length : items.filter((i) => i.category === c).length})
-          </button>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {shown.map((item) => {
-          const color = item.colors[0] ? COLOR_HEX[item.colors[0]] || "#9CA3AF" : "#9CA3AF";
-          const badgeStyle = getBadgeStyle(item.badge);
-          return (
+      <div className="flex items-center justify-between">
+        <div className="inline-flex rounded-full p-0.5" style={{ background: "var(--faint)" }}>
+          {([["buckets", "By category"], ["all", "All items"]] as const).map((opt) => (
             <button
-              key={item.id}
-              onClick={() => setSelected(item)}
-              className="text-left rounded-2xl overflow-hidden transition-all"
-              style={{ background: "white", border: "1px solid var(--warm-grey)" }}
+              key={opt[0]}
+              onClick={() => setView(opt[0])}
+              className="text-xs px-3 py-1.5 rounded-full transition-all"
+              style={
+                view === opt[0]
+                  ? { background: "white", color: "var(--emerald)", boxShadow: "0 1px 2px rgba(0,0,0,0.08)" }
+                  : { color: "var(--mid-grey)" }
+              }
             >
-              {item.imageUrl ? (
-                <img src={item.imageUrl} alt={item.name} className="w-full object-cover" style={{ height: 140 }} />
-              ) : (
-                <div
-                  className="w-full flex items-center justify-center"
-                  style={{ height: 140, background: color + "15", fontSize: 48 }}
-                >
-                  {CATEGORY_ICONS[item.category] || "👗"}
-                </div>
-              )}
-              <div className="p-3">
-                <p className="text-xs font-medium truncate" style={{ color: "var(--ink)" }}>
-                  {item.name}
-                </p>
-                <p className="text-xs mt-0.5" style={{ color: "var(--mid-grey)" }}>
-                  {item.brand}
-                </p>
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {item.colors.map((c) => (
-                    <span
-                      key={c}
-                      className="w-3 h-3 rounded-full border"
-                      style={{ background: COLOR_HEX[c] || "#ccc", borderColor: "var(--warm-grey)" }}
-                      title={c}
-                    />
-                  ))}
-                </div>
-                <span className="text-xs px-1.5 py-0.5 rounded-full mt-1.5 inline-block" style={badgeStyle as any}>
-                  {item.badge}
-                </span>
-              </div>
+              {opt[1]}
             </button>
-          );
-        })}
+          ))}
+        </div>
+        <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
+          {items.length} items
+        </span>
       </div>
 
-      {shown.length === 0 && (
+      {view === "buckets" ? (
+        <div className="space-y-5">
+          {groups.length > 1 && (
+            <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+              {groups.map((g) => (
+                <button
+                  key={g.bucket}
+                  onClick={() => jumpTo(g.bucket)}
+                  className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full"
+                  style={{ background: "white", border: "1px solid var(--warm-grey)", color: "var(--mid-grey)" }}
+                >
+                  {bucketLabel(g.bucket)} ({g.list.length})
+                </button>
+              ))}
+            </div>
+          )}
+          {groups.map((g) => (
+            <section key={g.bucket} id={bucketAnchor(g.bucket)} style={{ scrollMarginTop: 72 }}>
+              <button
+                onClick={() => toggleBucket(g.bucket)}
+                className="w-full flex items-center justify-between mb-2"
+              >
+                <span className="serif text-base" style={{ color: "var(--emerald)" }}>
+                  {bucketLabel(g.bucket)}{" "}
+                  <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
+                    ({g.list.length})
+                  </span>
+                </span>
+                <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
+                  {collapsed.has(g.bucket) ? "Show" : "Hide"}
+                </span>
+              </button>
+              {!collapsed.has(g.bucket) && (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{g.list.map(renderCard)}</div>
+              )}
+            </section>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+            {allCats.map((c) => (
+              <button
+                key={c}
+                onClick={() => setFilter(c)}
+                className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full transition-all"
+                style={
+                  filter === c
+                    ? { background: "var(--emerald)", color: "#F7F4EE" }
+                    : { background: "white", border: "1px solid var(--warm-grey)", color: "var(--mid-grey)" }
+                }
+              >
+                {c} ({c === "All" ? items.length : items.filter((i) => i.category === c).length})
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{shown.map(renderCard)}</div>
+        </div>
+      )}
+
+      {items.length === 0 && (
         <div className="text-center py-12" style={{ color: "var(--mid-grey)" }}>
           <Layers size={28} className="mx-auto mb-2 opacity-30" />
-          <p className="text-sm">No items in this category yet</p>
+          <p className="text-sm">Your closet is empty so far. Use Add to bring in your first piece.</p>
         </div>
       )}
 
@@ -1529,7 +1648,7 @@ function ClosetGrid({
                 className="w-full rounded-2xl flex items-center justify-center mb-4"
                 style={{ height: 160, background: "var(--faint)", fontSize: 64 }}
               >
-                {CATEGORY_ICONS[selected.category] || "👗"}
+                {emojiFor(selected.category, selected.sub_category, selected.name)}
               </div>
             )}
             <h3 className="serif text-xl" style={{ color: "var(--emerald)" }}>
@@ -1584,8 +1703,80 @@ function ClosetGrid({
 
 // ─── Stylist Chat ─────────────────────────────────────────────────────────────
 
+// One outfit option drawn as a board of the user's own pieces. Items the user
+// does not own yet appear as dashed "to add" tiles.
+function OutfitBoard({ outfit, byId }: { outfit: Outfit; byId: Map<string, ClosetItem> }) {
+  const pieces = outfit.itemIds
+    .map((id) => byId.get(id))
+    .filter((i): i is ClosetItem => Boolean(i))
+    .sort(
+      (a, b) =>
+        BUCKETS.indexOf(bucketOf(a.category, a.sub_category, a.name)) -
+        BUCKETS.indexOf(bucketOf(b.category, b.sub_category, b.name))
+    );
+  if (pieces.length === 0 && outfit.missing.length === 0) return null;
+  return (
+    <div className="rounded-2xl p-3 fade-in" style={{ background: "white", border: "1px solid var(--warm-grey)" }}>
+      <p className="serif text-base" style={{ color: "var(--emerald)" }}>
+        {outfit.title}
+      </p>
+      {outfit.note && (
+        <p className="text-xs mt-0.5 mb-2.5" style={{ color: "var(--mid-grey)" }}>
+          {outfit.note}
+        </p>
+      )}
+      <div className="grid grid-cols-3 gap-2">
+        {pieces.map((item) => {
+          const color = item.colors[0] ? COLOR_HEX[item.colors[0]] || "#9CA3AF" : "#9CA3AF";
+          return (
+            <div key={item.id}>
+              {item.imageUrl ? (
+                <img
+                  src={item.imageUrl}
+                  alt={item.name}
+                  className="w-full rounded-xl object-cover"
+                  style={{ aspectRatio: "1 / 1" }}
+                />
+              ) : (
+                <div
+                  className="w-full rounded-xl flex items-center justify-center"
+                  style={{ aspectRatio: "1 / 1", background: color + "22", fontSize: 34 }}
+                >
+                  {emojiFor(item.category, item.sub_category, item.name)}
+                </div>
+              )}
+              <p className="text-xs mt-1 truncate" style={{ color: "var(--ink)" }}>
+                {item.name}
+              </p>
+            </div>
+          );
+        })}
+        {outfit.missing.map((label) => (
+          <div key={label}>
+            <div
+              className="w-full rounded-xl flex items-center justify-center text-center px-2"
+              style={{
+                aspectRatio: "1 / 1",
+                border: "1.5px dashed var(--warm-grey)",
+                color: "var(--mid-grey)",
+                fontSize: 11,
+              }}
+            >
+              {label}
+            </div>
+            <p className="text-xs mt-1" style={{ color: "var(--mid-grey)" }}>
+              To add
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StylistChat({ items }: { items: ClosetItem[] }) {
-  const [messages, setMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([
+  const byId = useMemo(() => new Map(items.map((i) => [i.id, i] as [string, ClosetItem])), [items]);
+  const [messages, setMessages] = useState<{ role: "user" | "assistant"; content: string; outfits?: Outfit[] }[]>([
     {
       role: "assistant",
       content:
@@ -1613,14 +1804,17 @@ function StylistChat({ items }: { items: ClosetItem[] }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: newMessages,
+          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
         }),
       });
       const data = await res.json();
       const reply: string = res.ok
         ? data.message
         : data.error || "I'm having trouble connecting — try again in a moment.";
-      setMessages((prev) => prev.concat([{ role: "assistant", content: reply }]));
+      const outfits: Outfit[] = res.ok && Array.isArray(data.outfits) ? data.outfits : [];
+      setMessages((prev) =>
+        prev.concat([{ role: "assistant", content: reply || "Here are a few ideas.", outfits }])
+      );
     } catch {
       setMessages((prev) =>
         prev.concat([{ role: "assistant", content: "I'm having trouble connecting — try again in a moment." }])
@@ -1636,7 +1830,8 @@ function StylistChat({ items }: { items: ClosetItem[] }) {
     <div className="flex flex-col" style={{ height: "calc(100vh - 200px)", minHeight: 400 }}>
       <div className="flex-1 overflow-y-auto space-y-3 pb-4">
         {messages.map((m, i) => (
-          <div key={i} className={"flex " + (m.role === "user" ? "justify-end" : "gap-2.5") + " fade-in"}>
+          <div key={i} className="space-y-2.5">
+          <div className={"flex " + (m.role === "user" ? "justify-end" : "gap-2.5") + " fade-in"}>
             {m.role === "assistant" && (
               <div
                 className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center"
@@ -1660,6 +1855,14 @@ function StylistChat({ items }: { items: ClosetItem[] }) {
             >
               {m.content}
             </div>
+          </div>
+          {m.outfits && m.outfits.length > 0 && (
+            <div className="pl-10 space-y-2.5">
+              {m.outfits.map((o, k) => (
+                <OutfitBoard key={k} outfit={o} byId={byId} />
+              ))}
+            </div>
+          )}
           </div>
         ))}
         {loading && (
@@ -1824,6 +2027,19 @@ export default function App() {
   const pendingRef = useRef<Map<string, { item: ClosetItem; meta: AddMeta }>>(new Map());
   const inFlightRef = useRef<Set<string>>(new Set());
   const saveFailLogRef = useRef<Map<string, string>>(new Map());
+  const photoInFlightRef = useRef<Set<string>>(new Set());
+  const loadPhoto = useCallback((id: string) => {
+    if (photoInFlightRef.current.has(id)) return;
+    photoInFlightRef.current.add(id);
+    getPhotoUrl(id)
+      .then((url) => {
+        if (url) setPhotoUrls((prev) => ({ ...prev, [id]: url }));
+      })
+      .catch(() => {})
+      .finally(() => {
+        photoInFlightRef.current.delete(id);
+      });
+  }, []);
 
   // The signed-in user comes from Supabase. When the session ends (sign-out or
   // an expired login), clear everything held in memory so the next person who
@@ -1862,14 +2078,13 @@ export default function App() {
     let cancelled = false;
     setClosetError("");
     loadCloset()
-      .then(({ items: loaded, photoUrls: urls }) => {
+      .then(({ items: loaded }) => {
         if (cancelled) return;
         const loadedIds = new Set(loaded.map((i) => i.id));
         setItems((prev) => [
           ...prev.filter((i) => pendingRef.current.has(i.id) && !loadedIds.has(i.id)),
           ...loaded,
         ]);
-        setPhotoUrls(urls);
       })
       .catch(() => {
         if (!cancelled) setClosetError("Couldn't load your saved closet. Please refresh the page.");
@@ -2075,7 +2290,7 @@ export default function App() {
         {tab === "closet" && (
           <>
             <Analytics items={items} logs={logs} />
-            <ClosetGrid items={items} photoUrls={photoUrls} />
+            <ClosetGrid items={items} photoUrls={photoUrls} loadPhoto={loadPhoto} />
           </>
         )}
 

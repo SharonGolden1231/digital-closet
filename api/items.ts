@@ -129,45 +129,73 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: "Service unavailable" });
     }
 
+    // ----------------------------------------------- full photo for one item
+    if (req.method === "GET" && req.query?.photo) {
+      const itemId = String(req.query.photo);
+      if (!UUID_RE.test(itemId)) {
+        return res.status(400).json({ error: "Invalid item id." });
+      }
+      const { data: photoRow } = await db
+        .from("item_images")
+        .select("storage_path")
+        .eq("item_id", itemId)
+        .eq("image_type", "photo")
+        .maybeSingle();
+      if (!photoRow) return res.status(404).json({ error: "No photo." });
+      const { data: signed } = await db.storage
+        .from(BUCKET)
+        .createSignedUrl((photoRow as any).storage_path, 3600);
+      if (!signed?.signedUrl) return res.status(404).json({ error: "No photo." });
+      return res.status(200).json({ url: signed.signedUrl });
+    }
+
     // ---------------------------------------------------------- list closet
     if (req.method === "GET") {
-      const { data: rows, error } = await db
-        .from("closet_items")
-        .select(LIST_COLUMNS)
-        .is("deleted_at", null)
-        .order("created_at", { ascending: false })
-        .limit(1000);
-      if (error) {
-        console.error("items list failed:", error.code, error.message);
+      // The two reads are independent, so they run at the same time.
+      const [itemsResult, imagesResult] = await Promise.all([
+        db
+          .from("closet_items")
+          .select(LIST_COLUMNS)
+          .is("deleted_at", null)
+          .order("created_at", { ascending: false })
+          .limit(1000),
+        db
+          .from("item_images")
+          .select("item_id, storage_path, image_type")
+          .in("image_type", ["photo", "thumb"])
+          .limit(5000),
+      ]);
+      if (itemsResult.error) {
+        console.error("items list failed:", itemsResult.error.code, itemsResult.error.message);
         return res.status(500).json({ error: "Couldn't load your closet." });
       }
-
-      const { data: images } = await db
-        .from("item_images")
-        .select("item_id, storage_path, image_type")
-        .in("image_type", ["photo", "thumb"])
-        .limit(5000);
+      const rows = (itemsResult.data ?? []) as any[];
 
       const byItem = new Map<string, { photo?: string; thumb?: string }>();
-      for (const img of (images ?? []) as any[]) {
+      for (const img of (imagesResult.data ?? []) as any[]) {
         const entry = byItem.get(img.item_id) ?? {};
         if (img.image_type === "photo") entry.photo = img.storage_path;
         if (img.image_type === "thumb") entry.thumb = img.storage_path;
         byItem.set(img.item_id, entry);
       }
 
+      // Only the small thumbnail is signed for the grid (or the photo when an
+      // item has no thumbnail). The full photo is fetched when an item opens.
+      const pathFor = (id: string): string | undefined => {
+        const e = byItem.get(id);
+        return e?.thumb ?? e?.photo;
+      };
       const wanted = new Set<string>();
-      for (const r of (rows ?? []) as any[]) {
-        const e = byItem.get(r.id);
-        if (e?.thumb) wanted.add(e.thumb);
-        if (e?.photo) wanted.add(e.photo);
+      for (const r of rows) {
+        const path = pathFor(r.id);
+        if (path) wanted.add(path);
       }
 
       const urlByPath = new Map<string, string>();
       if (wanted.size > 0) {
         const { data: signed, error: signError } = await db.storage
           .from(BUCKET)
-          .createSignedUrls(Array.from(wanted), 3600);
+          .createSignedUrls(Array.from(wanted), 21600);
         if (signError) {
           console.error("items sign failed:", signError.message);
         }
@@ -176,11 +204,10 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      const items = ((rows ?? []) as any[]).map((r) => {
-        const e = byItem.get(r.id);
-        const photoUrl = e?.photo ? urlByPath.get(e.photo) : undefined;
-        const thumbUrl = e?.thumb ? urlByPath.get(e.thumb) : photoUrl;
-        return { ...r, thumbUrl: thumbUrl ?? null, photoUrl: photoUrl ?? null };
+      const items = rows.map((r) => {
+        const path = pathFor(r.id);
+        const thumbUrl = path ? urlByPath.get(path) : undefined;
+        return { ...r, thumbUrl: thumbUrl ?? null, hasPhoto: Boolean(byItem.get(r.id)?.photo) };
       });
       return res.status(200).json({ items });
     }
