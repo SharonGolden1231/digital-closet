@@ -30,7 +30,7 @@ import type {
 } from "./types";
 import { supabase, authConfigured } from "./lib/supabase";
 import { authFetch } from "./lib/authFetch";
-import { saveItem, loadCloset, newItemId, getPhotoUrl } from "./lib/closetSync";
+import { saveItem, loadCloset, newItemId, getPhotoUrl, deleteItem } from "./lib/closetSync";
 import type { AddMeta, Outfit } from "./lib/closetSync";
 import { BUCKETS, bucketOf, bucketLabel, emojiFor } from "./lib/taxonomy";
 import type { Bucket } from "./lib/taxonomy";
@@ -1421,10 +1421,14 @@ function ClosetGrid({
   items,
   photoUrls,
   loadPhoto,
+  saveState,
+  onRemove,
 }: {
   items: ClosetItem[];
   photoUrls: Record<string, string>;
   loadPhoto: (id: string) => void;
+  saveState: Record<string, "saving" | "failed">;
+  onRemove: (item: ClosetItem) => Promise<boolean>;
 }) {
   const [selected, setSelected] = useState<ClosetItem | null>(null);
   const [view, setViewState] = useState<"folders" | "all">(() => {
@@ -1435,6 +1439,13 @@ function ClosetGrid({
     }
   });
   const [openBucket, setOpenBucket] = useState<Bucket | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
+
+  // Each newly opened item starts without a pending "remove?" question.
+  useEffect(() => {
+    setConfirmRemove(false);
+  }, [selected]);
 
   const setView = (v: "folders" | "all") => {
     setViewState(v);
@@ -1686,6 +1697,53 @@ function ClosetGrid({
             <p className="text-xs mt-3" style={{ color: "var(--mid-grey)" }}>
               Added {new Date(selected.addedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
             </p>
+            <div className="mt-6 pt-4" style={{ borderTop: "1px solid var(--warm-grey)" }}>
+              {confirmRemove ? (
+                <div className="space-y-2">
+                  <p className="text-xs" style={{ color: "var(--ink)" }}>
+                    Remove this item from your closet?
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setConfirmRemove(false)}
+                      disabled={removing}
+                      className="flex-1 text-xs py-2 rounded-xl"
+                      style={{ border: "1px solid var(--warm-grey)", color: "var(--mid-grey)" }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setRemoving(true);
+                        const removed = await onRemove(selected);
+                        setRemoving(false);
+                        if (removed) {
+                          setConfirmRemove(false);
+                          setSelected(null);
+                        }
+                      }}
+                      disabled={removing}
+                      className="flex-1 text-xs py-2 rounded-xl"
+                      style={{ background: "#B91C1C", color: "white" }}
+                    >
+                      {removing ? "Removing…" : "Remove"}
+                    </button>
+                  </div>
+                </div>
+              ) : saveState[selected.id] === "saving" ? (
+                <p className="text-xs" style={{ color: "var(--mid-grey)" }}>
+                  Saving… you can remove this item once it is saved.
+                </p>
+              ) : (
+                <button
+                  onClick={() => setConfirmRemove(true)}
+                  className="text-xs underline"
+                  style={{ color: "#B91C1C" }}
+                >
+                  Remove from closet
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -2136,6 +2194,35 @@ export default function App() {
     });
   };
 
+  // Removes an item. A saved item is soft-deleted on the server first; an item
+  // that never saved is simply discarded. Returns whether the item is gone.
+  const removeItem = async (item: ClosetItem): Promise<boolean> => {
+    const unsaved = pendingRef.current.has(item.id);
+    if (unsaved && inFlightRef.current.has(item.id)) return false; // still saving
+    if (!unsaved) {
+      try {
+        await deleteItem(item.id);
+      } catch {
+        setClosetError("Couldn't remove the item. Please try again.");
+        setTimeout(() => setClosetError(""), 6000);
+        return false;
+      }
+    }
+    pendingRef.current.delete(item.id);
+    setSaveState((prev) => {
+      const next = { ...prev };
+      delete next[item.id];
+      return next;
+    });
+    const failLogId = saveFailLogRef.current.get(item.id);
+    if (failLogId) {
+      saveFailLogRef.current.delete(item.id);
+      setLogs((prev) => prev.filter((l) => l.id !== failLogId));
+    }
+    setItems((prev) => prev.filter((i) => i.id !== item.id));
+    return true;
+  };
+
   const addItem = (partial: Partial<ClosetItem>, imageUrl?: string, meta?: AddMeta) => {
     const item: ClosetItem = {
       id: newItemId(),
@@ -2282,7 +2369,13 @@ export default function App() {
         {tab === "closet" && (
           <>
             <Analytics items={items} logs={logs} />
-            <ClosetGrid items={items} photoUrls={photoUrls} loadPhoto={loadPhoto} />
+            <ClosetGrid
+              items={items}
+              photoUrls={photoUrls}
+              loadPhoto={loadPhoto}
+              saveState={saveState}
+              onRemove={removeItem}
+            />
           </>
         )}
 

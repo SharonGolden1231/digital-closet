@@ -213,5 +213,6 @@ export async function deleteItem(id: string): Promise<void> {
   const res = await authFetch(`/api/items?id=${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error("Couldn't remove item.");
+  // 404 means it is already gone (for example removed in another tab).
+  if (!res.ok && res.status !== 404) throw new Error("Couldn't remove item.");
 }
