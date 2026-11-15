@@ -32,7 +32,8 @@ import { supabase, authConfigured } from "./lib/supabase";
 import { authFetch } from "./lib/authFetch";
 import { saveItem, loadCloset, newItemId, getPhotoUrl } from "./lib/closetSync";
 import type { AddMeta, Outfit } from "./lib/closetSync";
-import { BUCKETS, bucketOf, bucketLabel, bucketAnchor, emojiFor } from "./lib/taxonomy";
+import { BUCKETS, bucketOf, bucketLabel, emojiFor } from "./lib/taxonomy";
+import type { Bucket } from "./lib/taxonomy";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1425,18 +1426,17 @@ function ClosetGrid({
   photoUrls: Record<string, string>;
   loadPhoto: (id: string) => void;
 }) {
-  const [filter, setFilter] = useState("All");
   const [selected, setSelected] = useState<ClosetItem | null>(null);
-  const [view, setViewState] = useState<"buckets" | "all">(() => {
+  const [view, setViewState] = useState<"folders" | "all">(() => {
     try {
-      return localStorage.getItem("vestry.closetView") === "all" ? "all" : "buckets";
+      return localStorage.getItem("vestry.closetView") === "all" ? "all" : "folders";
     } catch {
-      return "buckets";
+      return "folders";
     }
   });
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [openBucket, setOpenBucket] = useState<Bucket | null>(null);
 
-  const setView = (v: "buckets" | "all") => {
+  const setView = (v: "folders" | "all") => {
     setViewState(v);
     try {
       localStorage.setItem("vestry.closetView", v);
@@ -1450,10 +1450,6 @@ function ClosetGrid({
     if (selected) loadPhoto(selected.id);
   }, [selected, loadPhoto]);
 
-  const uniqueCats = Array.from(new Set(items.map((i) => i.category)));
-  const allCats = ["All"].concat(uniqueCats);
-  const shown = filter === "All" ? items : items.filter((i) => i.category === filter);
-
   const groups = useMemo(
     () =>
       BUCKETS.map((bucket) => ({
@@ -1462,28 +1458,7 @@ function ClosetGrid({
       })).filter((g) => g.list.length > 0),
     [items]
   );
-
-  const toggleBucket = (bucket: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(bucket)) next.delete(bucket);
-      else next.add(bucket);
-      return next;
-    });
-  };
-
-  const jumpTo = (bucket: (typeof BUCKETS)[number]) => {
-    setCollapsed((prev) => {
-      if (!prev.has(bucket)) return prev;
-      const next = new Set(prev);
-      next.delete(bucket);
-      return next;
-    });
-    setTimeout(() => {
-      const el = document.getElementById(bucketAnchor(bucket));
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 50);
-  };
+  const openGroup = openBucket ? groups.find((g) => g.bucket === openBucket) || null : null;
 
   const renderCard = (item: ClosetItem) => {
     const color = item.colors[0] ? COLOR_HEX[item.colors[0]] || "#9CA3AF" : "#9CA3AF";
@@ -1530,11 +1505,61 @@ function ClosetGrid({
     );
   };
 
+  // A folder: a small collage of its first items, the bucket name and a count.
+  const renderFolder = (g: { bucket: Bucket; list: ClosetItem[] }) => {
+    const preview = g.list.slice(0, 4);
+    return (
+      <button
+        key={g.bucket}
+        onClick={() => setOpenBucket(g.bucket)}
+        className="text-left rounded-2xl overflow-hidden transition-all"
+        style={{ background: "white", border: "1px solid var(--warm-grey)" }}
+      >
+        <div className="grid grid-cols-2 gap-0.5 p-1.5" style={{ background: "var(--faint)" }}>
+          {[0, 1, 2, 3].map((n) => {
+            const it = preview[n];
+            if (!it) {
+              return (
+                <div key={n} className="rounded-lg" style={{ aspectRatio: "1 / 1", background: "rgba(0,0,0,0.03)" }} />
+              );
+            }
+            const color = it.colors[0] ? COLOR_HEX[it.colors[0]] || "#9CA3AF" : "#9CA3AF";
+            return it.imageUrl ? (
+              <img
+                key={n}
+                src={it.imageUrl}
+                alt=""
+                className="w-full rounded-lg object-cover"
+                style={{ aspectRatio: "1 / 1" }}
+              />
+            ) : (
+              <div
+                key={n}
+                className="w-full rounded-lg flex items-center justify-center"
+                style={{ aspectRatio: "1 / 1", background: color + "22", fontSize: 22 }}
+              >
+                {emojiFor(it.category, it.sub_category, it.name)}
+              </div>
+            );
+          })}
+        </div>
+        <div className="p-3">
+          <p className="serif text-base" style={{ color: "var(--emerald)" }}>
+            {bucketLabel(g.bucket)}
+          </p>
+          <p className="text-xs" style={{ color: "var(--mid-grey)" }}>
+            {g.list.length} {g.list.length === 1 ? "item" : "items"}
+          </p>
+        </div>
+      </button>
+    );
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="inline-flex rounded-full p-0.5" style={{ background: "var(--faint)" }}>
-          {([["buckets", "By category"], ["all", "All items"]] as const).map((opt) => (
+          {([["folders", "Folders"], ["all", "All items"]] as const).map((opt) => (
             <button
               key={opt[0]}
               onClick={() => setView(opt[0])}
@@ -1554,64 +1579,31 @@ function ClosetGrid({
         </span>
       </div>
 
-      {view === "buckets" ? (
-        <div className="space-y-5">
-          {groups.length > 1 && (
-            <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
-              {groups.map((g) => (
-                <button
-                  key={g.bucket}
-                  onClick={() => jumpTo(g.bucket)}
-                  className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full"
-                  style={{ background: "white", border: "1px solid var(--warm-grey)", color: "var(--mid-grey)" }}
-                >
-                  {bucketLabel(g.bucket)} ({g.list.length})
-                </button>
-              ))}
-            </div>
-          )}
-          {groups.map((g) => (
-            <section key={g.bucket} id={bucketAnchor(g.bucket)} style={{ scrollMarginTop: 72 }}>
-              <button
-                onClick={() => toggleBucket(g.bucket)}
-                className="w-full flex items-center justify-between mb-2"
-              >
-                <span className="serif text-base" style={{ color: "var(--emerald)" }}>
-                  {bucketLabel(g.bucket)}{" "}
-                  <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
-                    ({g.list.length})
-                  </span>
-                </span>
-                <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
-                  {collapsed.has(g.bucket) ? "Show" : "Hide"}
-                </span>
-              </button>
-              {!collapsed.has(g.bucket) && (
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{g.list.map(renderCard)}</div>
-              )}
-            </section>
-          ))}
+      {items.length > 0 && view === "folders" && !openGroup && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{groups.map(renderFolder)}</div>
+      )}
+
+      {items.length > 0 && view === "folders" && openGroup && (
+        <div className="space-y-3">
+          <button
+            onClick={() => setOpenBucket(null)}
+            className="text-xs flex items-center gap-1"
+            style={{ color: "var(--emerald)" }}
+          >
+            ← All folders
+          </button>
+          <p className="serif text-lg" style={{ color: "var(--emerald)" }}>
+            {bucketLabel(openGroup.bucket)}{" "}
+            <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
+              ({openGroup.list.length})
+            </span>
+          </p>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{openGroup.list.map(renderCard)}</div>
         </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
-            {allCats.map((c) => (
-              <button
-                key={c}
-                onClick={() => setFilter(c)}
-                className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full transition-all"
-                style={
-                  filter === c
-                    ? { background: "var(--emerald)", color: "#F7F4EE" }
-                    : { background: "white", border: "1px solid var(--warm-grey)", color: "var(--mid-grey)" }
-                }
-              >
-                {c} ({c === "All" ? items.length : items.filter((i) => i.category === c).length})
-              </button>
-            ))}
-          </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{shown.map(renderCard)}</div>
-        </div>
+      )}
+
+      {items.length > 0 && view === "all" && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{items.map(renderCard)}</div>
       )}
 
       {items.length === 0 && (
