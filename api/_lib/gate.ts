@@ -7,12 +7,19 @@ const MAX_CHAT_MESSAGES = 30;
 const MAX_MESSAGE_CHARS = 8000;
 const MAX_CLOSET_CONTEXT_CHARS = 30000;
 
+// The version of the "how Vestry uses AI" text the user must have accepted.
+// Raise it in Vercel (AI_CONSENT_VERSION) when the text changes; everyone is
+// then asked again.
+export function currentConsentVersion(): string {
+  return process.env.AI_CONSENT_VERSION || "2026-11-v1";
+}
+
 // HTTP statuses from the auth service that mean "this token is not valid".
 // Anything else (network failure, 5xx, unknown) is a service problem, not a
 // bad login, and must NOT sign the user out.
 const TOKEN_REJECTED_STATUSES = [400, 401, 403, 404];
 
-function getAdminClient() {
+export function getAdminClient() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return null;
@@ -32,7 +39,8 @@ export function getBearerToken(req: any): string {
 // error response.
 export async function verifyUser(
   req: any,
-  res: any
+  res: any,
+  opts: { allowPendingDeletion?: boolean } = {}
 ): Promise<{ userId: string; token: string } | null> {
   const admin = getAdminClient();
   if (!admin) {
@@ -66,7 +74,55 @@ export async function verifyUser(
     res.status(401).json({ error: "Session expired — please sign in again." });
     return null;
   }
+
+  // An account that asked to be deleted is locked: nothing works except the
+  // account route (which lets the person see the date or cancel). Fails
+  // closed: if the check itself fails the call is refused with a 503.
+  if (!opts.allowPendingDeletion) {
+    const { data: profile, error: profileError } = await admin
+      .from("profiles")
+      .select("deletion_requested_at")
+      .eq("id", data.user.id)
+      .maybeSingle();
+    if (profileError) {
+      console.error("Gate profile check failed:", profileError.message);
+      res.status(503).json({
+        error: "Service is temporarily unavailable — please try again in a moment.",
+      });
+      return null;
+    }
+    if ((profile as any)?.deletion_requested_at) {
+      res.status(403).json({
+        error: "This account is scheduled for deletion.",
+        code: "account_deleting",
+      });
+      return null;
+    }
+  }
   return { userId: data.user.id, token };
+}
+
+// True when the user's most recent AI-processing decision is "accepted" for
+// the current text version. Returns null if the lookup itself failed.
+export async function hasAiConsent(
+  admin: any,
+  userId: string
+): Promise<boolean | null> {
+  const { data, error } = await admin
+    .from("consent_records")
+    .select("granted, policy_version")
+    .eq("user_id", userId)
+    .eq("consent_type", "ai_processing")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("Gate consent lookup failed:", error.message);
+    return null;
+  }
+  return (
+    data?.granted === true && data?.policy_version === currentConsentVersion()
+  );
 }
 
 // Verifies the login token, enforces the per-user daily cap, and records the
@@ -85,6 +141,23 @@ export async function requireUser(
     console.error("Gate misconfigured: Supabase server settings are missing");
     res.status(500).json({ error: "Service unavailable" });
     return null;
+  }
+
+  // Off until REQUIRE_AI_CONSENT=1 is set in Vercel, so this code can be
+  // deployed before the app has its consent screen.
+  if (process.env.REQUIRE_AI_CONSENT === "1") {
+    const consented = await hasAiConsent(admin, userId);
+    if (consented === null) {
+      res.status(500).json({ error: "Service unavailable" });
+      return null;
+    }
+    if (!consented) {
+      res.status(403).json({
+        error: "Please review and accept how Vestry uses AI first.",
+        code: "consent_required",
+      });
+      return null;
+    }
   }
 
   const cap = Number(process.env.AI_DAILY_CAP) || DEFAULT_DAILY_CAP;
