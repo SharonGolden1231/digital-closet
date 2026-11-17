@@ -1,5 +1,5 @@
-import { timingSafeEqual } from "node:crypto";
 import { getAdminClient } from "./_lib/gate.js";
+import { cronSecret, cronAuthorized } from "./_lib/secrets.js";
 
 // Founder-only controls for the invite release. Protected by the same secret
 // as the purge job (Authorization: Bearer <CRON_SECRET>).
@@ -9,23 +9,17 @@ import { getAdminClient } from "./_lib/gate.js";
 
 const MAX_CAP = 500;
 
-function authorized(sent: string, secret: string): boolean {
-  const a = Buffer.from(sent);
-  const b = Buffer.from(`Bearer ${secret}`);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 export default async function handler(req: any, res: any) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const secret = process.env.CRON_SECRET;
-  if (!secret || secret.length < 16) {
+  const secret = cronSecret();
+  if (!secret) {
     console.error("admin-cap: CRON_SECRET is missing or too short");
     return res.status(500).json({ error: "Not configured" });
   }
-  if (!authorized(String(req.headers?.authorization ?? ""), secret)) {
+  if (!cronAuthorized(req.headers?.authorization, secret)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 

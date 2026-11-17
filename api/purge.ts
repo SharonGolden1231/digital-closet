@@ -1,6 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
-import { timingSafeEqual } from "node:crypto";
 import { BUCKET } from "./_lib/closet.js";
+import {
+  cronSecret,
+  cronAuthorized,
+  consentHashKey,
+  consentUserRef,
+  consentEmailRef,
+} from "./_lib/secrets.js";
 
 // Permanently deletes, once a day from a Vercel cron job:
 //  1. items removed from a closet 7 days ago or more: photo files first (Storage
@@ -23,12 +29,6 @@ function chunks<T>(list: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
   return out;
-}
-
-function authorized(sent: string, secret: string): boolean {
-  const a = Buffer.from(sent);
-  const b = Buffer.from(`Bearer ${secret}`);
-  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 export type PurgeSummary = {
@@ -127,7 +127,8 @@ export type AccountPurgeSummary = {
 // login and is retried on the next run.
 export async function runAccountPurge(
   admin: any,
-  dryRun: boolean
+  dryRun: boolean,
+  hashKey: string
 ): Promise<AccountPurgeSummary> {
   const { data: due, error } = await admin.rpc("accounts_due_for_purge");
   if (error) throw new Error("accounts_due_for_purge failed: " + error.message);
@@ -157,12 +158,20 @@ export async function runAccountPurge(
         if (removeError) throw new Error("file removal failed: " + removeError.message);
         summary.purgedFiles += Array.isArray(removed) ? removed.length : 0;
       }
-      // Keep proof of consent (hashed, minimal) before the login and its rows
-      // disappear. If this fails the account is kept and retried tomorrow.
+
+      // Keep proof of consent (keyed hashes only, minimal) before the login
+      // and its rows disappear. If this fails the account is kept and retried
+      // tomorrow.
+      const { data: found, error: lookupError } = await admin.auth.admin.getUserById(userId);
+      if (lookupError) throw new Error("user lookup failed: " + lookupError.message);
+      const email = found?.user?.email ? String(found.user.email) : "";
       const { error: archiveError } = await admin.rpc("archive_consent_for_user", {
         p_user_id: userId,
+        p_user_ref: consentUserRef(hashKey, userId),
+        p_email_ref: email ? consentEmailRef(hashKey, email) : null,
       });
       if (archiveError) throw new Error("consent archive failed: " + archiveError.message);
+
       const { error: deleteError } = await admin.auth.admin.deleteUser(userId);
       if (deleteError) throw new Error("user delete failed: " + deleteError.message);
       summary.purgedAccounts += 1;
@@ -179,13 +188,21 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const secret = process.env.CRON_SECRET;
-  if (!secret || secret.length < 16) {
+  const secret = cronSecret();
+  if (!secret) {
     console.error("purge: CRON_SECRET is missing or too short");
     return res.status(500).json({ error: "Not configured" });
   }
-  if (!authorized(String(req.headers?.authorization ?? ""), secret)) {
+  if (!cronAuthorized(req.headers?.authorization, secret)) {
     return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  // Checked before any work (dry run included), so a missing key shows up in
+  // a dry run instead of failing every account deletion later.
+  const hashKey = consentHashKey();
+  if (!hashKey) {
+    console.error("purge: CONSENT_HASH_KEY is missing or too short");
+    return res.status(500).json({ error: "Not configured" });
   }
 
   const url = process.env.SUPABASE_URL;
@@ -201,7 +218,7 @@ export default async function handler(req: any, res: any) {
   try {
     const dry = String(req.query?.dry ?? "") === "1";
     const summary = await runPurge(admin, dry);
-    const accounts = await runAccountPurge(admin, dry);
+    const accounts = await runAccountPurge(admin, dry, hashKey);
     // Counts only: no user ids, item names or file paths in the logs.
     console.log("purge summary:", JSON.stringify({ ...summary, accounts }));
     return res.status(200).json({ ...summary, accounts });
