@@ -198,11 +198,19 @@ export function SetNewPassword({ onDone }: { onDone: () => void }) {
   return (
     <Page>
       <Title sub="Pick a new password for your account.">Set a new password</Title>
-      <NewPasswordFields pw={pw} setPw={setPw} pw2={pw2} setPw2={setPw2} />
-      <ErrorNote>{error}</ErrorNote>
-      <Primary onClick={save} disabled={busy}>
-        {busy ? "Saving…" : "Save new password"}
-      </Primary>
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+      >
+        <NewPasswordFields pw={pw} setPw={setPw} pw2={pw2} setPw2={setPw2} />
+        <ErrorNote>{error}</ErrorNote>
+        <Primary type="submit" disabled={busy}>
+          {busy ? "Saving…" : "Save new password"}
+        </Primary>
+      </form>
       <Secondary onClick={() => void supabase.auth.signOut()}>Cancel and sign out</Secondary>
     </Page>
   );
@@ -280,7 +288,13 @@ export function ChangePassword() {
       {!open ? (
         <Secondary onClick={() => { setOpen(true); setDone(false); }}>Change password</Secondary>
       ) : (
-        <div className="space-y-3">
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+        >
           <input
             type="password"
             value={current}
@@ -292,11 +306,11 @@ export function ChangePassword() {
           />
           <NewPasswordFields pw={pw} setPw={setPw} pw2={pw2} setPw2={setPw2} />
           <ErrorNote>{error}</ErrorNote>
-          <Primary onClick={save} disabled={busy}>
+          <Primary type="submit" disabled={busy}>
             {busy ? "Saving…" : "Save new password"}
           </Primary>
           <Secondary onClick={reset}>Cancel</Secondary>
-        </div>
+        </form>
       )}
     </Card>
   );

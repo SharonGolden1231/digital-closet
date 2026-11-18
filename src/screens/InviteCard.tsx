@@ -2,30 +2,15 @@ import { useState } from "react";
 import type { Invite } from "../lib/account";
 import { track } from "../lib/track";
 
-// Main-page card with the person's unused invite codes. Copy, or Share on
-// phones (the system share sheet). Hidden when no codes are left.
+// Slim main-page bar: "N invites left" + Invite button. Tapping "codes"
+// opens a small list with Copy / Share per code. Hidden when none are left.
 
 export function InviteCard({ invites }: { invites: Invite[] }) {
   const open = invites.filter((i) => !i.used && !i.paused);
+  const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState("");
-  const [collapsed, setCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem("vestry.inviteCard.collapsed") === "1";
-    } catch {
-      return false;
-    }
-  });
 
   if (open.length === 0) return null;
-
-  const setCollapsedSaved = (v: boolean) => {
-    setCollapsed(v);
-    try {
-      localStorage.setItem("vestry.inviteCard.collapsed", v ? "1" : "0");
-    } catch {
-      // storage unavailable: fine
-    }
-  };
 
   const message = (code: string) =>
     "Join me on Vestry, my AI stylist and digital closet. Use my invite code " +
@@ -33,17 +18,9 @@ export function InviteCard({ invites }: { invites: Invite[] }) {
     " at " +
     window.location.origin;
 
-  const share = async (code: string) => {
-    const nav: any = navigator;
-    if (nav.share) {
-      try {
-        await nav.share({ title: "Vestry invite", text: message(code) });
-        track("invite_shared", { method: "share_sheet" });
-        return;
-      } catch {
-        // cancelled: fall through to copy
-      }
-    }
+  const canShare = typeof navigator !== "undefined" && typeof (navigator as any).share === "function";
+
+  const copy = async (code: string) => {
     try {
       await navigator.clipboard.writeText(message(code));
       setCopied(code);
@@ -54,44 +31,62 @@ export function InviteCard({ invites }: { invites: Invite[] }) {
     }
   };
 
+  const share = async (code: string) => {
+    if (!canShare) return copy(code);
+    try {
+      await (navigator as any).share({ title: "Vestry invite", text: message(code) });
+      track("invite_shared", { method: "share_sheet" });
+    } catch {
+      // cancelled by the person: nothing to do
+    }
+  };
+
+  const linkStyle = { color: "var(--emerald)" };
+
   return (
     <div
-      className="rounded-2xl p-4 mb-5"
-      style={{ background: "var(--emerald)", color: "#F7F4EE" }}
+      className="rounded-xl mb-4 px-3.5 py-2.5"
+      style={{ background: "white", border: "1px solid var(--warm-grey)" }}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="serif text-lg leading-tight">Invite friends to Vestry</p>
-          <p className="text-xs mt-0.5" style={{ color: "rgba(247,244,238,0.7)" }}>
-            You have {open.length} invite{open.length === 1 ? "" : "s"} left. Each code lets one person join.
-          </p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs" style={{ color: "var(--ink)" }}>
+          <span style={{ color: "var(--gold)" }}>✦</span>{" "}
+          <span className="font-medium">
+            {open.length} invite{open.length === 1 ? "" : "s"}
+          </span>{" "}
+          <span style={{ color: "var(--mid-grey)" }}>to share with friends</span>
+        </p>
+        <div className="flex items-center gap-3 flex-shrink-0">
+          <button type="button" onClick={() => setExpanded(!expanded)} className="text-xs underline" style={linkStyle}>
+            {expanded ? "Hide" : "Codes"}
+          </button>
+          <button
+            type="button"
+            onClick={() => share(open[0].code)}
+            className="text-xs font-medium px-3 py-1 rounded-full"
+            style={{ background: "var(--emerald)", color: "#F7F4EE" }}
+          >
+            {copied === open[0].code ? "Copied" : "Invite"}
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => setCollapsedSaved(!collapsed)}
-          className="text-xs underline flex-shrink-0"
-          style={{ color: "rgba(247,244,238,0.7)" }}
-        >
-          {collapsed ? "Show" : "Hide"}
-        </button>
       </div>
-      {!collapsed && (
-        <div className="mt-3 space-y-2">
+      {expanded && (
+        <div className="mt-2 pt-2 space-y-1.5" style={{ borderTop: "1px solid var(--faint)" }}>
           {open.map((inv) => (
-            <div
-              key={inv.code}
-              className="flex items-center justify-between rounded-xl px-3 py-2"
-              style={{ background: "rgba(255,255,255,0.08)" }}
-            >
-              <span className="mono text-sm tracking-wider">{inv.code}</span>
-              <button
-                type="button"
-                onClick={() => share(inv.code)}
-                className="text-xs font-medium px-3 py-1.5 rounded-full"
-                style={{ background: "var(--gold)", color: "var(--emerald)" }}
-              >
-                {copied === inv.code ? "Copied" : "Share"}
-              </button>
+            <div key={inv.code} className="flex items-center justify-between">
+              <span className="mono text-xs tracking-wider" style={{ color: "var(--ink)" }}>
+                {inv.code}
+              </span>
+              <div className="flex items-center gap-3">
+                <button type="button" onClick={() => copy(inv.code)} className="text-xs underline" style={linkStyle}>
+                  {copied === inv.code ? "Copied" : "Copy"}
+                </button>
+                {canShare && (
+                  <button type="button" onClick={() => share(inv.code)} className="text-xs underline" style={linkStyle}>
+                    Share
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
