@@ -14,13 +14,16 @@ const AGE_BANDS = ["18-24", "25-34", "35-44", "45-54", "55-64", "65+"];
 const SHOPS_FOR = ["womenswear", "menswear", "both"];
 const WEEKDAYS = [
   "office_formal", "business_casual", "creative", "remote",
-  "on_feet", "student", "home_with_kids", "other",
+  "on_feet", "student", "home_with_kids", "other", "evenings_out", "gym_workout",
 ];
 const WEEKENDS = ["errands", "outdoors_sport", "going_out", "events", "family"];
-const STYLES = ["classic", "minimal", "relaxed", "polished", "edgy", "romantic", "sporty", "bold"];
+const STYLES = [
+  "classic", "minimal", "relaxed", "polished", "edgy", "romantic", "sporty", "bold",
+  "street_casual", "modest", "luxe", "quiet_luxury", "boho", "preppy", "trendy", "vintage",
+];
 const GOALS = [
   "dress_faster", "wear_more_closet", "put_together",
-  "buy_smarter", "find_style", "new_stage",
+  "buy_smarter", "find_style", "new_stage", "dress_to_impress", "new_style", "body_shape",
 ];
 const BRAND_TIERS = ["fast_fashion", "mid_market", "premium", "luxury", "resale_vintage"];
 const FIT_ISSUES = ["waist", "hips", "chest", "shoulders", "length", "sleeves", "none"];
@@ -109,12 +112,12 @@ export function buildUpdate(answers: any): Record<string, unknown> {
   }
   if (has("age_band")) row.age_band = pickOne(answers.age_band, AGE_BANDS, "age_band");
   if (has("shops_for")) row.shops_for = pickOne(answers.shops_for, SHOPS_FOR, "shops_for");
-  if (has("weekdays")) row.weekdays = pickMany(answers.weekdays, WEEKDAYS, 2, "weekdays");
+  if (has("weekdays")) row.weekdays = pickMany(answers.weekdays, WEEKDAYS, 4, "weekdays");
   if (has("weekends")) row.weekends = pickMany(answers.weekends, WEEKENDS, WEEKENDS.length, "weekends");
   if (has("style_now")) row.style_now = pickMany(answers.style_now, STYLES, 3, "style_now");
   if (has("style_toward")) row.style_toward = pickMany(answers.style_toward, STYLES, 3, "style_toward");
   if (has("style_icon")) row.style_icon = cleanText(answers.style_icon, 80, "style_icon");
-  if (has("goals")) row.goals = pickMany(answers.goals, GOALS, 2, "goals");
+  if (has("goals")) row.goals = pickMany(answers.goals, GOALS, 3, "goals");
   if (has("brand_tiers")) row.brand_tiers = pickMany(answers.brand_tiers, BRAND_TIERS, BRAND_TIERS.length, "brand_tiers");
   if (has("brands")) row.brands = freeList(answers.brands, 20, 40, "brands");
   if (has("height_cm")) {

@@ -23,6 +23,8 @@ export const WEEKDAYS: Option[] = [
   { id: "student", label: "Student" },
   { id: "home_with_kids", label: "At home with kids" },
   { id: "other", label: "Something else" },
+  { id: "evenings_out", label: "Dinners / evenings out" },
+  { id: "gym_workout", label: "Gym / workout" },
 ];
 
 export const WEEKENDS: Option[] = [
@@ -42,6 +44,14 @@ export const STYLES: Option[] = [
   { id: "romantic", label: "Romantic" },
   { id: "sporty", label: "Sporty" },
   { id: "bold", label: "Bold" },
+  { id: "street_casual", label: "Street casual" },
+  { id: "modest", label: "Modest / conservative" },
+  { id: "luxe", label: "Luxurious" },
+  { id: "quiet_luxury", label: "Quiet luxury" },
+  { id: "boho", label: "Boho" },
+  { id: "preppy", label: "Preppy" },
+  { id: "trendy", label: "Trendy" },
+  { id: "vintage", label: "Vintage" },
 ];
 
 export const GOALS: Option[] = [
@@ -51,6 +61,9 @@ export const GOALS: Option[] = [
   { id: "buy_smarter", label: "Buy less, buy smarter" },
   { id: "find_style", label: "Find my style" },
   { id: "new_stage", label: "Dress for a new role or stage" },
+  { id: "dress_to_impress", label: "Dress to impress" },
+  { id: "new_style", label: "Find a new style" },
+  { id: "body_shape", label: "Dress for my body shape" },
 ];
 
 export const BRAND_TIERS: Option[] = [

@@ -292,8 +292,8 @@ export function Onboarding({
         <>
           <Title sub="Your week decides which basics matter most.">What does your week look like?</Title>
           <div className="space-y-2">
-            <Label hint="Pick up to 2">Weekdays</Label>
-            <Many options={WEEKDAYS} value={p.weekdays} max={2} onChange={(v) => set({ weekdays: v })} />
+            <Label hint="Pick up to 4 — work, evenings, workouts">Weekdays</Label>
+            <Many options={WEEKDAYS} value={p.weekdays} max={4} onChange={(v) => set({ weekdays: v })} />
           </div>
           <div className="space-y-2">
             <Label hint="Pick any">Weekends</Label>
@@ -328,8 +328,8 @@ export function Onboarding({
 
       {step === "goals" && (
         <>
-          <Title sub="Pick up to 2 — this decides what your stylist focuses on.">What would help you most?</Title>
-          <Many options={GOALS} value={p.goals} max={2} onChange={(v) => set({ goals: v })} />
+          <Title sub="Pick up to 3 — this decides what your stylist focuses on.">What would help you most?</Title>
+          <Many options={GOALS} value={p.goals} max={3} onChange={(v) => set({ goals: v })} />
         </>
       )}
 
@@ -389,6 +389,13 @@ export function Onboarding({
       {step === "fit" && (
         <>
           <Title sub="All optional. Your sizes come from the labels you scan.">Fit and colours</Title>
+          <p
+            className="text-xs rounded-xl px-3 py-2 leading-relaxed"
+            style={{ background: "var(--success-bg)", color: "var(--emerald)" }}
+          >
+            Skip anything you like — you can add or change all of this later in Settings, and soon simply by telling
+            your stylist.
+          </p>
           <div className="space-y-2">
             <Label hint="Optional — helps with proportions and lengths">Height</Label>
             <div className="flex gap-2 items-center">
