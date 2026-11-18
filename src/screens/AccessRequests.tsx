@@ -15,6 +15,7 @@ type Req = {
   status: "pending" | "approved" | "declined";
   invite_code: string | null;
   created_at: string;
+  joined_at?: string | null;
 };
 
 const OS_LABEL: Record<string, string> = { iphone: "iPhone", android: "Android", other: "Other" };
@@ -151,10 +152,33 @@ export function AccessRequests() {
                   <dd style={{ color: "var(--ink)" }}>
                     {new Date(r.created_at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                   </dd>
+                  {r.joined_at && (
+                    <>
+                      <dt style={{ color: "var(--mid-grey)" }}>Joined</dt>
+                      <dd style={{ color: "var(--ink)" }}>
+                        {new Date(r.joined_at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      </dd>
+                    </>
+                  )}
                 </dl>
               </div>
-              <span className="text-xs flex-shrink-0" style={{ color: r.status === "approved" ? "var(--emerald)" : "var(--mid-grey)" }}>
-                {r.status === "pending" ? "Waiting" : r.status === "approved" ? "Approved" : "Declined"}
+              <span
+                className="text-xs flex-shrink-0 px-2 py-0.5 rounded-full"
+                style={
+                  r.joined_at
+                    ? { background: "var(--emerald)", color: "#F7F4EE" }
+                    : r.status === "approved"
+                      ? { background: "var(--success-bg)", color: "var(--emerald)" }
+                      : { background: "var(--faint)", color: "var(--mid-grey)" }
+                }
+              >
+                {r.status === "pending"
+                  ? "Waiting"
+                  : r.status === "declined"
+                    ? "Declined"
+                    : r.joined_at
+                      ? "Joined"
+                      : "Approved · not joined yet"}
               </span>
             </div>
             {r.status === "approved" && r.invite_code && (
