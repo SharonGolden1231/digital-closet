@@ -19,6 +19,7 @@ import {
   Upload,
   Scan,
   LogOut,
+  Settings as SettingsIcon,
 } from "lucide-react";
 import type {
   ClosetItem,
@@ -33,6 +34,16 @@ import { authFetch } from "./lib/authFetch";
 import { saveItem, loadCloset, newItemId, getPhotoUrl, deleteItem } from "./lib/closetSync";
 import type { AddMeta, Outfit } from "./lib/closetSync";
 import { BUCKETS, bucketOf, bucketLabel, emojiFor } from "./lib/taxonomy";
+import { ACCOUNT_DELETING_EVENT } from "./lib/authFetch";
+import { getAccount, getProfile } from "./lib/account";
+import type { AccountStatus, ProfileResponse } from "./lib/account";
+import { identify, track, resetTracking } from "./lib/track";
+import { InviteSignUp } from "./screens/InviteSignUp";
+import { ConsentScreen } from "./screens/ConsentScreen";
+import { Onboarding } from "./screens/Onboarding";
+import { Settings } from "./screens/Settings";
+import { DeletionPending } from "./screens/DeletionPending";
+import { Page, Title, Primary, Secondary } from "./screens/ui";
 import type { Bucket } from "./lib/taxonomy";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -267,6 +278,7 @@ function buildShopSearchUrl(query: string) {
 // ─── Login ────────────────────────────────────────────────────────────────────
 
 function LoginScreen() {
+  const [mode, setMode] = useState<"signin" | "invite">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -325,6 +337,9 @@ function LoginScreen() {
             </p>
           </div>
         </div>
+        {mode === "invite" ? (
+          <InviteSignUp onBack={() => setMode("signin")} />
+        ) : (
         <form
           className="space-y-3"
           onSubmit={(e) => {
@@ -385,9 +400,13 @@ function LoginScreen() {
             {busy ? "Signing in…" : "Sign in →"}
           </button>
           <p className="text-xs text-center pt-1" style={{ color: "rgba(181,175,164,0.7)" }}>
-            Invite-only. Ask for access if you don't have an account.
+            Invite-only.{" "}
+            <button type="button" onClick={() => setMode("invite")} className="underline">
+              I have an invite code
+            </button>
           </p>
         </form>
+        )}
       </div>
     </div>
   );
@@ -1862,6 +1881,7 @@ function StylistChat({ items }: { items: ClosetItem[] }) {
         ? data.message
         : data.error || "I'm having trouble connecting — try again in a moment.";
       const outfits: Outfit[] = res.ok && Array.isArray(data.outfits) ? data.outfits : [];
+      if (outfits.length > 0) track("recommendation_opened", { outfits: outfits.length });
       setMessages((prev) =>
         prev.concat([{ role: "assistant", content: reply || "Here are a few ideas.", outfits }])
       );
@@ -2066,6 +2086,13 @@ function Analytics({ items, logs }: { items: ClosetItem[]; logs: AdminLog[] }) {
 
 export default function App() {
   const [user, setUser] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  // What the signed-in person should see before the closet: deletion screen,
+  // consent, intro questions, or the app itself.
+  const [gate, setGate] = useState<"loading" | "deleting" | "consent" | "onboarding" | "ready" | "error">("loading");
+  const [account, setAccount] = useState<AccountStatus | null>(null);
+  const [prof, setProf] = useState<ProfileResponse | null>(null);
+  const [editingAnswers, setEditingAnswers] = useState(false);
   const [items, setItems] = useState<ClosetItem[]>([]);
   const [logs, setLogs] = useState<AdminLog[]>([]);
   const [tab, setTab] = useState<Tab>("closet");
@@ -2100,12 +2127,19 @@ export default function App() {
 
     supabase.auth.getSession().then(({ data }) => {
       setUser(displayName(data.session?.user.email));
+      setUserId(data.session?.user.id ?? null);
       setAuthReady(true);
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(displayName(session?.user.email));
+      setUserId(session?.user.id ?? null);
       if (!session) {
+        resetTracking();
+        setGate("loading");
+        setAccount(null);
+        setProf(null);
+        setEditingAnswers(false);
         setItems([]);
         setPhotoUrls({});
         setSaveState({});
@@ -2122,9 +2156,46 @@ export default function App() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  // Load the saved closet from the server whenever someone signs in.
+  // Decide which screen a signed-in person sees first. The account route is
+  // the one route a locked (deleting) account can still use, so it goes first.
+  const loadGate = useCallback(async () => {
+    try {
+      const acc = await getAccount();
+      setAccount(acc);
+      if (acc.deletionRequestedAt) {
+        setGate("deleting");
+        return;
+      }
+      if (!acc.aiConsent) {
+        setGate("consent");
+        return;
+      }
+      const p = await getProfile();
+      setProf(p);
+      setGate(p.profile?.onboarding_completed_at ? "ready" : "onboarding");
+    } catch {
+      setGate("error");
+    }
+  }, []);
+
   useEffect(() => {
-    if (!user) return;
+    if (!userId) return;
+    identify(userId);
+    track("session_start");
+    setGate("loading");
+    void loadGate();
+  }, [userId, loadGate]);
+
+  // Any route answering "account_deleting" sends the person to that screen.
+  useEffect(() => {
+    const onDeleting = () => void loadGate();
+    window.addEventListener(ACCOUNT_DELETING_EVENT, onDeleting);
+    return () => window.removeEventListener(ACCOUNT_DELETING_EVENT, onDeleting);
+  }, [loadGate]);
+
+  // Load the saved closet from the server once the person is through the gate.
+  useEffect(() => {
+    if (!user || gate !== "ready") return;
     let cancelled = false;
     setClosetError("");
     loadCloset()
@@ -2142,7 +2213,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user, gate]);
 
   // Ask before closing the tab while an item is still being saved.
   useEffect(() => {
@@ -2164,6 +2235,7 @@ export default function App() {
     setSaveState((prev) => ({ ...prev, [item.id]: "saving" }));
     try {
       await saveItem(item, meta);
+      track("item_saved", { channel: item.source_signals[0] || "manual" });
       pendingRef.current.delete(item.id);
       setSaveState((prev) => {
         const next = { ...prev };
@@ -2265,6 +2337,51 @@ export default function App() {
   }
   if (!user) return <LoginScreen />;
 
+  const signOut = () => void supabase.auth.signOut();
+
+  if (gate === "loading") {
+    return <div className="min-h-screen" style={{ background: "var(--parchment)" }} />;
+  }
+  if (gate === "error") {
+    return (
+      <Page>
+        <Title sub="Check your connection and try again.">Couldn't load your account</Title>
+        <Primary onClick={() => { setGate("loading"); void loadGate(); }}>Try again</Primary>
+        <Secondary onClick={signOut}>Sign out</Secondary>
+      </Page>
+    );
+  }
+  if (gate === "deleting") {
+    return (
+      <DeletionPending
+        deleteOn={account?.deleteOn ?? null}
+        onCancelled={() => { setGate("loading"); void loadGate(); }}
+        onSignOut={signOut}
+      />
+    );
+  }
+  if (gate === "consent") {
+    return <ConsentScreen onDone={() => { setGate("loading"); void loadGate(); }} onSignOut={signOut} />;
+  }
+  if (gate === "onboarding" || editingAnswers) {
+    return (
+      <Onboarding
+        initial={prof?.profile ?? null}
+        initialMeasurements={prof?.measurements ?? null}
+        editing={editingAnswers}
+        onCancel={editingAnswers ? () => setEditingAnswers(false) : undefined}
+        onDone={() => {
+          setEditingAnswers(false);
+          setGate("loading");
+          void loadGate();
+        }}
+      />
+    );
+  }
+
+  const isAdmin = prof?.isAdmin === true;
+  const greetingName = prof?.profile?.first_name || user;
+
   const CHANNELS_CONFIG = [
     { id: "A" as Channel, label: "Camera", sub: "AI Vision QC", Icon: Camera },
     { id: "B" as Channel, label: "Tag Scan", sub: "Label intelligence", Icon: Tag },
@@ -2272,11 +2389,13 @@ export default function App() {
     { id: "D" as Channel, label: "Manual", sub: "Category picker", Icon: PenLine },
   ];
 
+  // The Logs tab is for the admin only (server-managed flag).
   const NAV = [
     { id: "closet" as Tab, label: "Closet", Icon: Grid3X3 },
     { id: "add" as Tab, label: "Add Item", Icon: Plus },
     { id: "stylist" as Tab, label: "Stylist", Icon: MessageCircle },
-    { id: "logs" as Tab, label: "Logs", Icon: Terminal },
+    ...(isAdmin ? [{ id: "logs" as Tab, label: "Logs", Icon: Terminal }] : []),
+    { id: "settings" as Tab, label: "Settings", Icon: SettingsIcon },
   ];
 
   const PAGE: Record<Tab, { h: string; sub: string }> = {
@@ -2284,6 +2403,7 @@ export default function App() {
     add: { h: "Add an Item", sub: "Choose ingestion channel" },
     stylist: { h: "AI Stylist", sub: "Wardrobe intelligence" },
     logs: { h: "Admin Logs", sub: logs.length + " exception" + (logs.length !== 1 ? "s" : "") },
+    settings: { h: "Settings", sub: "Your account and answers" },
   };
 
   return (
@@ -2306,7 +2426,7 @@ export default function App() {
                 Digital Closet
               </span>
               <span className="text-xs ml-2" style={{ color: "var(--mid-grey)" }}>
-                — {user}
+                — {greetingName}
               </span>
             </div>
           </div>
@@ -2368,7 +2488,7 @@ export default function App() {
 
         {tab === "closet" && (
           <>
-            <Analytics items={items} logs={logs} />
+            {isAdmin && <Analytics items={items} logs={logs} />}
             <ClosetGrid
               items={items}
               photoUrls={photoUrls}
@@ -2409,7 +2529,19 @@ export default function App() {
         )}
 
         {tab === "stylist" && <StylistChat items={items} />}
-        {tab === "logs" && <AdminLogs logs={logs} />}
+        {tab === "logs" && isAdmin && <AdminLogs logs={logs} />}
+        {tab === "settings" && account && (
+          <Settings
+            account={account}
+            profile={prof?.profile ?? null}
+            measurements={prof?.measurements ?? null}
+            onMeasurementsDeleted={() => void loadGate()}
+            onEditAnswers={() => setEditingAnswers(true)}
+            onConsentWithdrawn={() => { setGate("loading"); void loadGate(); }}
+            onDeletionRequested={() => void supabase.auth.signOut()}
+            onSignOut={signOut}
+          />
+        )}
       </main>
 
       <nav
@@ -2420,7 +2552,7 @@ export default function App() {
           borderTop: "1px solid var(--warm-grey)",
         }}
       >
-        <div className="grid grid-cols-4 gap-1">
+        <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(" + NAV.length + ", minmax(0, 1fr))" }}>
           {NAV.map((n) => (
             <button
               key={n.id}

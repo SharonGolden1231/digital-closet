@@ -41,5 +41,21 @@ export async function authFetch(
       throw new SignInRequiredError("Session expired — please sign in again.");
     }
   }
+
+  // A locked account (deletion requested) gets 403 account_deleting from every
+  // route except /api/account. Tell the app so it can show the deletion
+  // screen instead of a vague "trouble connecting".
+  if (res.status === 403) {
+    try {
+      const data = await res.clone().json();
+      if (data?.code === "account_deleting") {
+        window.dispatchEvent(new CustomEvent(ACCOUNT_DELETING_EVENT));
+      }
+    } catch {
+      // not JSON: nothing to do
+    }
+  }
   return res;
 }
+
+export const ACCOUNT_DELETING_EVENT = "vestry:account-deleting";

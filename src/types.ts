@@ -75,5 +75,5 @@ export interface TagScanResponse {
   source_signals: string[];
 }
 
-export type Tab = "closet" | "add" | "stylist" | "logs";
+export type Tab = "closet" | "add" | "stylist" | "logs" | "settings";
 export type Channel = "A" | "B" | "C" | "D";

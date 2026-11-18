@@ -70,9 +70,12 @@ export default async function handler(req: any, res: any) {
         deleteOn,
         aiConsent: c?.granted === true && c?.policy_version === version,
         consentVersion: version,
+        // Unused codes stop working while deletion is pending (option C) and
+        // work again if it is cancelled, so they are shown as paused.
         invites: ((codes.data ?? []) as any[]).map((r) => ({
           code: r.code,
           used: Boolean(r.redeemed_at),
+          paused: Boolean(requestedAt) && !r.redeemed_at,
         })),
       });
     }
@@ -124,6 +127,14 @@ export default async function handler(req: any, res: any) {
         p_granted: body.granted,
       });
       if (error) {
+        // The database refuses a NEW consent while deletion is pending
+        // (withdrawing is always allowed).
+        if (/account_deleting/.test(error.message)) {
+          return res.status(403).json({
+            error: "This account is scheduled for deletion.",
+            code: "account_deleting",
+          });
+        }
         console.error("consent failed:", error.message);
         return res.status(500).json({ error: "Couldn't save your choice." });
       }
