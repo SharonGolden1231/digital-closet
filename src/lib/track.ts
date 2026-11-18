@@ -43,7 +43,9 @@ export type TrackEvent =
   | "account_deletion_cancelled"
   | "invite_shared"
   | "password_reset_requested"
-  | "password_changed";
+  | "password_changed"
+  | "access_requested"
+  | "access_approved";
 
 export function identify(userId: string) {
   if (!start()) return;

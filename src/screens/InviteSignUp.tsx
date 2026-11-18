@@ -14,7 +14,7 @@ const fieldStyle = {
 
 const MIN_PASSWORD = 10;
 
-export function InviteSignUp({ onBack }: { onBack: () => void }) {
+export function InviteSignUp({ onBack, onWaveFull }: { onBack: () => void; onWaveFull?: () => void }) {
   const [code, setCode] = useState("");
   const [email, setEmail] = useState("");
   const [email2, setEmail2] = useState("");
@@ -22,6 +22,7 @@ export function InviteSignUp({ onBack }: { onBack: () => void }) {
   const [showPw, setShowPw] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [waveFull, setWaveFull] = useState(false);
 
   const emailsMatch = email.trim().toLowerCase() === email2.trim().toLowerCase();
   const ready = code.trim().length >= 6 && email.trim() && email2.trim() && password.length >= MIN_PASSWORD;
@@ -46,6 +47,7 @@ export function InviteSignUp({ onBack }: { onBack: () => void }) {
       }
       // On success the app moves on by itself (signed-in state).
     } catch (e) {
+      if (e instanceof ApiError && e.code === "batch_full") setWaveFull(true);
       setError(e instanceof ApiError ? e.message : "Couldn't create your account — check your connection.");
       setBusy(false);
     }
@@ -130,6 +132,16 @@ export function InviteSignUp({ onBack }: { onBack: () => void }) {
         <p className="text-xs" style={{ color: "#F5B5B5" }} role="alert">
           {error}
         </p>
+      )}
+      {waveFull && onWaveFull && (
+        <button
+          type="button"
+          onClick={onWaveFull}
+          className="w-full py-2.5 rounded-xl text-sm border"
+          style={{ borderColor: "#B8956A", color: "#B8956A" }}
+        >
+          Join the waiting list instead
+        </button>
       )}
       <button
         type="submit"

@@ -20,6 +20,7 @@ import {
   Scan,
   LogOut,
   Settings as SettingsIcon,
+  Users,
 } from "lucide-react";
 import type {
   ClosetItem,
@@ -46,6 +47,8 @@ import { DeletionPending } from "./screens/DeletionPending";
 import { Page, Title, Primary, Secondary } from "./screens/ui";
 import { ForgotPassword, SetNewPassword, signInErrorMessage } from "./screens/PasswordScreens";
 import { InviteCard } from "./screens/InviteCard";
+import { RequestAccess } from "./screens/RequestAccess";
+import { AccessRequests } from "./screens/AccessRequests";
 import type { Bucket } from "./lib/taxonomy";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -280,7 +283,7 @@ function buildShopSearchUrl(query: string) {
 // ─── Login ────────────────────────────────────────────────────────────────────
 
 function LoginScreen() {
-  const [mode, setMode] = useState<"signin" | "invite" | "forgot">("signin");
+  const [mode, setMode] = useState<"signin" | "invite" | "forgot" | "request" | "request_full">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -336,7 +339,9 @@ function LoginScreen() {
           </div>
         </div>
         {mode === "invite" ? (
-          <InviteSignUp onBack={() => setMode("signin")} />
+          <InviteSignUp onBack={() => setMode("signin")} onWaveFull={() => setMode("request_full")} />
+        ) : mode === "request" || mode === "request_full" ? (
+          <RequestAccess onBack={() => setMode("signin")} waveFull={mode === "request_full"} />
         ) : mode === "forgot" ? (
           <ForgotPassword
             initialEmail={email}
@@ -419,6 +424,12 @@ function LoginScreen() {
             Invite-only.{" "}
             <button type="button" onClick={() => setMode("invite")} className="underline">
               I have an invite code
+            </button>
+          </p>
+          <p className="text-xs text-center" style={{ color: "rgba(181,175,164,0.7)" }}>
+            No code?{" "}
+            <button type="button" onClick={() => setMode("request")} className="underline">
+              Request access
             </button>
           </p>
         </form>
@@ -2425,7 +2436,12 @@ export default function App() {
     { id: "closet" as Tab, label: "Closet", Icon: Grid3X3 },
     { id: "add" as Tab, label: "Add Item", Icon: Plus },
     { id: "stylist" as Tab, label: "Stylist", Icon: MessageCircle },
-    ...(isAdmin ? [{ id: "logs" as Tab, label: "Logs", Icon: Terminal }] : []),
+    ...(isAdmin
+      ? [
+          { id: "logs" as Tab, label: "Logs", Icon: Terminal },
+          { id: "requests" as Tab, label: "Requests", Icon: Users },
+        ]
+      : []),
     { id: "settings" as Tab, label: "Settings", Icon: SettingsIcon },
   ];
 
@@ -2435,6 +2451,7 @@ export default function App() {
     stylist: { h: "AI Stylist", sub: "Wardrobe intelligence" },
     logs: { h: "Admin Logs", sub: logs.length + " exception" + (logs.length !== 1 ? "s" : "") },
     settings: { h: "Settings", sub: "Your account and answers" },
+    requests: { h: "Access requests", sub: "Waiting list — admin only" },
   };
 
   return (
@@ -2562,6 +2579,7 @@ export default function App() {
 
         {tab === "stylist" && <StylistChat items={items} />}
         {tab === "logs" && isAdmin && <AdminLogs logs={logs} />}
+        {tab === "requests" && isAdmin && <AccessRequests />}
         {tab === "settings" && account && (
           <Settings
             account={account}
