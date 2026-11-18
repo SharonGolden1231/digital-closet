@@ -26,6 +26,8 @@ function start(): boolean {
     persistence: "localStorage",
     ip: false,
   } as any);
+  // No location from IP: PostHog would otherwise store each person's city.
+  posthog.register({ $geoip_disable: true });
   started = true;
   return true;
 }
