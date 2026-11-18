@@ -140,14 +140,18 @@ export function AccessRequests() {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium break-all" style={{ color: "var(--ink)" }}>{r.email}</p>
-                <p className="text-xs" style={{ color: "var(--mid-grey)" }}>
-                  {[r.phone_os ? OS_LABEL[r.phone_os] : null, r.country, new Date(r.created_at).toLocaleDateString()]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </p>
-                {r.heard_from && (
-                  <p className="text-xs mt-0.5" style={{ color: "var(--ink)" }}>“{r.heard_from}”</p>
-                )}
+                <dl className="text-xs mt-1 grid gap-x-3 gap-y-0.5" style={{ gridTemplateColumns: "auto 1fr" }}>
+                  <dt style={{ color: "var(--mid-grey)" }}>Phone</dt>
+                  <dd style={{ color: "var(--ink)" }}>{r.phone_os ? OS_LABEL[r.phone_os] : "—"}</dd>
+                  <dt style={{ color: "var(--mid-grey)" }}>Country</dt>
+                  <dd style={{ color: "var(--ink)" }}>{r.country || "—"}</dd>
+                  <dt style={{ color: "var(--mid-grey)" }}>Heard via</dt>
+                  <dd className="break-words" style={{ color: "var(--ink)" }}>{r.heard_from || "—"}</dd>
+                  <dt style={{ color: "var(--mid-grey)" }}>Requested</dt>
+                  <dd style={{ color: "var(--ink)" }}>
+                    {new Date(r.created_at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                  </dd>
+                </dl>
               </div>
               <span className="text-xs flex-shrink-0" style={{ color: r.status === "approved" ? "var(--emerald)" : "var(--mid-grey)" }}>
                 {r.status === "pending" ? "Waiting" : r.status === "approved" ? "Approved" : "Declined"}
