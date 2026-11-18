@@ -36,7 +36,10 @@ export function AccessRequests() {
       const res = await authFetch("/api/admin-requests");
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Couldn't load requests.");
-      setRows(data.requests ?? []);
+      const list: Req[] = data.requests ?? [];
+      setRows(list);
+      // Once that person has joined, the code box has done its job.
+      setJustApproved((prev) => (prev && list.some((x) => x.id === prev.id && x.joined_at) ? null : prev));
     } catch (e: any) {
       setError(e?.message || "Couldn't load requests.");
     }
@@ -83,7 +86,11 @@ export function AccessRequests() {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(r.id);
-      setTimeout(() => setCopied(""), 1500);
+      setTimeout(() => {
+        setCopied("");
+        // Copied from the box at the top: close it.
+        setJustApproved((prev) => (prev?.id === r.id ? null : prev));
+      }, 1500);
     } catch {
       // the code is on screen anyway
     }
@@ -99,7 +106,10 @@ export function AccessRequests() {
           <button
             key={f}
             type="button"
-            onClick={() => setFilter(f)}
+            onClick={() => {
+              setFilter(f);
+              setJustApproved(null);
+            }}
             className="px-3 py-1.5 rounded-full text-xs"
             style={
               filter === f
