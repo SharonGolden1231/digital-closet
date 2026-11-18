@@ -29,7 +29,7 @@ import type {
   Tab,
   Channel,
 } from "./types";
-import { supabase, authConfigured } from "./lib/supabase";
+import { supabase, authConfigured, OPENED_FROM_RECOVERY_LINK } from "./lib/supabase";
 import { authFetch } from "./lib/authFetch";
 import { saveItem, loadCloset, newItemId, getPhotoUrl, deleteItem } from "./lib/closetSync";
 import type { AddMeta, Outfit } from "./lib/closetSync";
@@ -44,6 +44,8 @@ import { Onboarding } from "./screens/Onboarding";
 import { Settings } from "./screens/Settings";
 import { DeletionPending } from "./screens/DeletionPending";
 import { Page, Title, Primary, Secondary } from "./screens/ui";
+import { ForgotPassword, SetNewPassword, signInErrorMessage } from "./screens/PasswordScreens";
+import { InviteCard } from "./screens/InviteCard";
 import type { Bucket } from "./lib/taxonomy";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -278,7 +280,7 @@ function buildShopSearchUrl(query: string) {
 // ─── Login ────────────────────────────────────────────────────────────────────
 
 function LoginScreen() {
-  const [mode, setMode] = useState<"signin" | "invite">("signin");
+  const [mode, setMode] = useState<"signin" | "invite" | "forgot">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -298,11 +300,7 @@ function LoginScreen() {
         password: password,
       });
       if (signInError) {
-        setError(
-          /invalid/i.test(signInError.message)
-            ? "Incorrect email or password."
-            : "Couldn't sign in — check your connection and try again."
-        );
+        setError(signInErrorMessage(signInError));
       }
     } catch {
       setError("Couldn't sign in — check your connection and try again.");
@@ -339,6 +337,14 @@ function LoginScreen() {
         </div>
         {mode === "invite" ? (
           <InviteSignUp onBack={() => setMode("signin")} />
+        ) : mode === "forgot" ? (
+          <ForgotPassword
+            initialEmail={email}
+            onBack={() => {
+              setMode("signin");
+              setError("");
+            }}
+          />
         ) : (
         <form
           className="space-y-3"
@@ -399,6 +405,16 @@ function LoginScreen() {
           >
             {busy ? "Signing in…" : "Sign in →"}
           </button>
+          <p className="text-xs text-center">
+            <button
+              type="button"
+              onClick={() => setMode("forgot")}
+              className="underline"
+              style={{ color: "rgba(181,175,164,0.8)" }}
+            >
+              Forgot password?
+            </button>
+          </p>
           <p className="text-xs text-center pt-1" style={{ color: "rgba(181,175,164,0.7)" }}>
             Invite-only.{" "}
             <button type="button" onClick={() => setMode("invite")} className="underline">
@@ -2093,6 +2109,8 @@ export default function App() {
   const [account, setAccount] = useState<AccountStatus | null>(null);
   const [prof, setProf] = useState<ProfileResponse | null>(null);
   const [editingAnswers, setEditingAnswers] = useState(false);
+  // Opened from a password-reset email: ask for the new password first.
+  const [recovering, setRecovering] = useState(OPENED_FROM_RECOVERY_LINK);
   const [items, setItems] = useState<ClosetItem[]>([]);
   const [logs, setLogs] = useState<AdminLog[]>([]);
   const [tab, setTab] = useState<Tab>("closet");
@@ -2131,10 +2149,12 @@ export default function App() {
       setAuthReady(true);
     });
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") setRecovering(true);
       setUser(displayName(session?.user.email));
       setUserId(session?.user.id ?? null);
       if (!session) {
+        setRecovering(false);
         resetTracking();
         setGate("loading");
         setAccount(null);
@@ -2337,6 +2357,17 @@ export default function App() {
   }
   if (!user) return <LoginScreen />;
 
+  if (recovering) {
+    return (
+      <SetNewPassword
+        onDone={() => {
+          track("password_changed", { via: "reset_link" });
+          setRecovering(false);
+        }}
+      />
+    );
+  }
+
   const signOut = () => void supabase.auth.signOut();
 
   if (gate === "loading") {
@@ -2488,6 +2519,7 @@ export default function App() {
 
         {tab === "closet" && (
           <>
+            {account && <InviteCard invites={account.invites} />}
             {isAdmin && <Analytics items={items} logs={logs} />}
             <ClosetGrid
               items={items}

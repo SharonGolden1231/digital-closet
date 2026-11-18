@@ -4,6 +4,7 @@ import { STYLES, GOALS, WEEKDAYS, SHOPS_FOR, BRAND_TIERS, labelOf } from "./opti
 import { requestDeletion, setConsent, deleteMeasurements, ApiError } from "../lib/account";
 import type { AccountStatus, StyleProfile, Measurements } from "../lib/account";
 import { track } from "../lib/track";
+import { ChangePassword } from "./PasswordScreens";
 
 // Settings: style answers, My invites, AI consent, delete account, sign out.
 
@@ -167,6 +168,8 @@ export function Settings({
           </div>
         )}
       </Card>
+
+      <ChangePassword />
 
       <Card>
         <Label>AI features</Label>

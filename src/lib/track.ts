@@ -40,7 +40,10 @@ export type TrackEvent =
   | "item_saved"
   | "recommendation_opened"
   | "account_deletion_requested"
-  | "account_deletion_cancelled";
+  | "account_deletion_cancelled"
+  | "invite_shared"
+  | "password_reset_requested"
+  | "password_changed";
 
 export function identify(userId: string) {
   if (!start()) return;

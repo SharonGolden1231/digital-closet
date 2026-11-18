@@ -11,6 +11,11 @@ const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as
 
 export const authConfigured = Boolean(url && publishableKey);
 
+// Read BEFORE the client is created (it clears the address bar): true when
+// this page was opened from a "reset your password" email link.
+export const OPENED_FROM_RECOVERY_LINK =
+  typeof window !== "undefined" && /(^|[#&])type=recovery(&|$)/.test(window.location.hash);
+
 // createClient throws on an empty URL, so fall back to placeholders and let
 // the login screen show a clear "not set up" message instead of a blank page.
 export const supabase = createClient(
