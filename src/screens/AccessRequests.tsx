@@ -25,6 +25,9 @@ export function AccessRequests() {
   const [busyId, setBusyId] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
+  // The request just approved stays visible at the top with its code, even
+  // though it leaves the "Waiting" list.
+  const [justApproved, setJustApproved] = useState<Req | null>(null);
 
   const load = useCallback(async () => {
     setError("");
@@ -55,7 +58,12 @@ export function AccessRequests() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Couldn't update.");
-      if (action === "approve") track("access_approved");
+      if (action === "approve") {
+        track("access_approved");
+        setJustApproved({ ...r, status: "approved", invite_code: String(data.code || "") });
+      } else if (justApproved?.id === r.id) {
+        setJustApproved(null);
+      }
       await load();
     } catch (e: any) {
       setError(e?.message || "Couldn't update.");
@@ -106,6 +114,22 @@ export function AccessRequests() {
         </button>
       </div>
       <ErrorNote>{error}</ErrorNote>
+      {justApproved?.invite_code && (
+        <div className="rounded-2xl p-3.5 space-y-2" style={{ background: "var(--success-bg)", border: "1px solid var(--emerald-bright)" }}>
+          <p className="text-xs" style={{ color: "var(--emerald)" }}>
+            Approved <strong>{justApproved.email}</strong>. Send them this code:
+          </p>
+          <div className="flex items-center justify-between rounded-xl px-3 py-2 bg-white">
+            <span className="mono text-base tracking-wider" style={{ color: "var(--ink)" }}>{justApproved.invite_code}</span>
+            <button type="button" onClick={() => copyMessage(justApproved)} className="text-xs font-medium px-3 py-1.5 rounded-full" style={{ background: "var(--emerald)", color: "#F7F4EE" }}>
+              {copied === justApproved.id ? "Copied" : "Copy message"}
+            </button>
+          </div>
+          <button type="button" onClick={() => setJustApproved(null)} className="text-xs underline" style={{ color: "var(--mid-grey)" }}>
+            Done
+          </button>
+        </div>
+      )}
       {rows === null ? (
         <p className="text-sm" style={{ color: "var(--mid-grey)" }}>Loading…</p>
       ) : shown.length === 0 ? (
