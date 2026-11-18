@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
   Camera,
   Tag,
@@ -18,6 +18,9 @@ import {
   ExternalLink,
   Upload,
   Scan,
+  LogOut,
+  Settings as SettingsIcon,
+  Users,
 } from "lucide-react";
 import type {
   ClosetItem,
@@ -27,86 +30,28 @@ import type {
   Tab,
   Channel,
 } from "./types";
+import { supabase, authConfigured, OPENED_FROM_RECOVERY_LINK } from "./lib/supabase";
+import { authFetch } from "./lib/authFetch";
+import { saveItem, loadCloset, newItemId, getPhotoUrl, deleteItem } from "./lib/closetSync";
+import type { AddMeta, Outfit } from "./lib/closetSync";
+import { BUCKETS, bucketOf, bucketLabel, emojiFor } from "./lib/taxonomy";
+import { ACCOUNT_DELETING_EVENT } from "./lib/authFetch";
+import { getAccount, getProfile } from "./lib/account";
+import type { AccountStatus, ProfileResponse } from "./lib/account";
+import { identify, track, resetTracking } from "./lib/track";
+import { InviteSignUp } from "./screens/InviteSignUp";
+import { ConsentScreen } from "./screens/ConsentScreen";
+import { Onboarding } from "./screens/Onboarding";
+import { Settings } from "./screens/Settings";
+import { DeletionPending } from "./screens/DeletionPending";
+import { Page, Title, Primary, Secondary } from "./screens/ui";
+import { ForgotPassword, SetNewPassword, signInErrorMessage } from "./screens/PasswordScreens";
+import { InviteCard } from "./screens/InviteCard";
+import { RequestAccess } from "./screens/RequestAccess";
+import { AccessRequests } from "./screens/AccessRequests";
+import type { Bucket } from "./lib/taxonomy";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const SEED_ITEMS: ClosetItem[] = [
-  {
-    id: "s1",
-    name: "Tailored Wool Blazer",
-    category: "Outerwear",
-    sub_category: "Blazer",
-    sub_category_confidence: "high",
-    colors: ["Charcoal", "Grey"],
-    pattern: "Solid",
-    fit: "Tailored",
-    brand: "Zara",
-    material: "Wool blend",
-    source_signals: ["brand_import"],
-    badge: "Imported from Zara",
-    addedAt: "2024-11-12T09:23:00Z",
-  },
-  {
-    id: "s2",
-    name: "Slim Black Denim",
-    category: "Bottom",
-    sub_category: "Jeans",
-    sub_category_confidence: "high",
-    colors: ["Black"],
-    pattern: "Solid",
-    fit: "Slim",
-    brand: "Uniqlo",
-    material: "98% Cotton 2% Elastane",
-    source_signals: ["tag_scan"],
-    badge: "Digitized via Tag",
-    addedAt: "2024-11-18T14:05:00Z",
-  },
-  {
-    id: "s3",
-    name: "Ivory Linen Blouse",
-    category: "Top",
-    sub_category: "Blouse",
-    sub_category_confidence: "high",
-    colors: ["Cream", "Beige"],
-    pattern: "Solid",
-    fit: "Relaxed",
-    brand: "Mango",
-    material: "100% Linen",
-    source_signals: ["image"],
-    badge: "Background Cleaned",
-    addedAt: "2024-12-02T11:40:00Z",
-  },
-  {
-    id: "s4",
-    name: "Camel Trench Coat",
-    category: "Outerwear",
-    sub_category: "Trench Coat",
-    sub_category_confidence: "high",
-    colors: ["Camel"],
-    pattern: "Solid",
-    fit: "Regular",
-    brand: "Zara",
-    material: "Polyester blend",
-    source_signals: ["tag_scan", "visual_search"],
-    badge: "Digitized via Tag",
-    addedAt: "2024-12-15T16:22:00Z",
-  },
-  {
-    id: "s5",
-    name: "Olive Cargo Trousers",
-    category: "Bottom",
-    sub_category: "Tailored Trousers",
-    sub_category_confidence: "low",
-    colors: ["Olive"],
-    pattern: "Solid",
-    fit: "Regular",
-    brand: "Nike",
-    material: "Cotton twill",
-    source_signals: ["image"],
-    badge: "Camera Upload",
-    addedAt: "2025-01-08T08:15:00Z",
-  },
-];
 
 const COLOR_HEX: Record<string, string> = {
   Black: "#2B2927",
@@ -247,10 +192,6 @@ const BRANDS = [
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
-function genId() {
-  return "i_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
-}
-
 function genLogId() {
   return "l_" + Date.now();
 }
@@ -325,18 +266,6 @@ function compressImage(file: File): Promise<{ base64: string; mediaType: string 
   });
 }
 
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
 function getBadgeStyle(badge: string) {
   if (badge.indexOf("Imported") === 0)
     return { background: "#F0F0F5", color: "#2D2D5A", border: "1px solid #C0C0D4" };
@@ -351,10 +280,36 @@ function buildShopSearchUrl(query: string) {
   return "https://www.google.com/search?q=" + encodeURIComponent(query) + "&tbm=shop";
 }
 
-// ─── Onboarding ───────────────────────────────────────────────────────────────
+// ─── Login ────────────────────────────────────────────────────────────────────
 
-function OnboardScreen({ onEnter }: { onEnter: (name: string) => void }) {
-  const [name, setName] = useState("");
+function LoginScreen() {
+  const [mode, setMode] = useState<"signin" | "invite" | "forgot" | "request" | "request_full">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    if (busy || !email.trim() || !password) return;
+    if (!authConfigured) {
+      setError("Sign-in isn't set up on this site yet.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: password,
+      });
+      if (signInError) {
+        setError(signInErrorMessage(signInError));
+      }
+    } catch {
+      setError("Couldn't sign in — check your connection and try again.");
+    }
+    setBusy(false);
+  };
 
   return (
     <div
@@ -383,20 +338,38 @@ function OnboardScreen({ onEnter }: { onEnter: (name: string) => void }) {
             </p>
           </div>
         </div>
-        <div className="space-y-3">
+        {mode === "invite" ? (
+          <InviteSignUp onBack={() => setMode("signin")} onWaveFull={() => setMode("request_full")} />
+        ) : mode === "request" || mode === "request_full" ? (
+          <RequestAccess onBack={() => setMode("signin")} waveFull={mode === "request_full"} />
+        ) : mode === "forgot" ? (
+          <ForgotPassword
+            initialEmail={email}
+            onBack={() => {
+              setMode("signin");
+              setError("");
+            }}
+          />
+        ) : (
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+        >
           <label
             className="text-xs uppercase tracking-widest font-medium block"
             style={{ color: "#B8956A" }}
           >
-            Your Name
+            Email
           </label>
           <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && name.trim()) onEnter(name.trim());
-            }}
-            placeholder="Enter to begin"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+            autoComplete="username"
             autoFocus
             className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
             style={{
@@ -405,17 +378,62 @@ function OnboardScreen({ onEnter }: { onEnter: (name: string) => void }) {
               color: "#F7F4EE",
             }}
           />
-          <button
-            onClick={() => {
-              if (name.trim()) onEnter(name.trim());
+          <label
+            className="text-xs uppercase tracking-widest font-medium block"
+            style={{ color: "#B8956A" }}
+          >
+            Password
+          </label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Your password"
+            autoComplete="current-password"
+            className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
+            style={{
+              background: "rgba(255,255,255,0.07)",
+              border: "1px solid rgba(61,122,95,0.4)",
+              color: "#F7F4EE",
             }}
-            disabled={!name.trim()}
+          />
+          {error && (
+            <p className="text-xs" style={{ color: "#F5B5B5" }}>
+              {error}
+            </p>
+          )}
+          <button
+            type="submit"
+            disabled={busy || !email.trim() || !password}
             className="w-full py-3 rounded-xl text-sm font-medium transition-all disabled:opacity-40"
             style={{ background: "#B8956A", color: "#1A3028" }}
           >
-            Enter Closet →
+            {busy ? "Signing in…" : "Sign in →"}
           </button>
-        </div>
+          <p className="text-xs text-center">
+            <button
+              type="button"
+              onClick={() => setMode("forgot")}
+              className="underline"
+              style={{ color: "rgba(181,175,164,0.8)" }}
+            >
+              Forgot password?
+            </button>
+          </p>
+          <p className="text-xs text-center pt-1" style={{ color: "rgba(181,175,164,0.7)" }}>
+            Invite-only.{" "}
+            <button type="button" onClick={() => setMode("invite")} className="underline">
+              I have an invite code
+            </button>
+          </p>
+          <p className="text-xs text-center" style={{ color: "rgba(181,175,164,0.7)" }}>
+            No code?{" "}
+            <button type="button" onClick={() => setMode("request")} className="underline">
+              Request access
+            </button>
+          </p>
+        </form>
+        )}
       </div>
     </div>
   );
@@ -427,13 +445,18 @@ function ChannelA({
   onAddItem,
   onLog,
 }: {
-  onAddItem: (item: Partial<ClosetItem>, imageUrl?: string) => void;
+  onAddItem: (
+    item: Partial<ClosetItem>,
+    imageUrl?: string,
+    meta?: AddMeta
+  ) => void;
   onLog: (method: string, exc: string, detail: string) => void;
 }) {
   const [phase, setPhase] = useState<"idle" | "loading" | "fail" | "success" | "done">("idle");
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
   const [result, setResult] = useState<ClassifyResponse | null>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback(
@@ -446,17 +469,20 @@ function ChannelA({
 
       const objectUrl = URL.createObjectURL(file);
       setPreview(objectUrl);
+      setPhotoFile(file);
       setPhase("loading");
       setMessage("Evaluating image quality…");
 
       try {
-        const base64 = await fileToBase64(file);
-        const res = await fetch("/api/classify-item", {
+        // Shrink the photo first (same step the tag scan uses) so a large
+        // phone photo cannot exceed the server's request size limit.
+        const { base64, mediaType } = await compressImage(file);
+        const res = await authFetch("/api/classify-item", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             imageBase64: base64,
-            mediaType: file.type,
+            mediaType,
           }),
         });
 
@@ -515,7 +541,8 @@ function ChannelA({
         source_signals: ["image"],
         badge: "Camera Upload",
       },
-      preview || undefined
+      preview || undefined,
+      { file: photoFile || undefined, raw: result }
     );
     setPhase("done");
     setTimeout(() => {
@@ -717,7 +744,11 @@ function ChannelB({
   onAddItem,
   onLog,
 }: {
-  onAddItem: (item: Partial<ClosetItem>) => void;
+  onAddItem: (
+    item: Partial<ClosetItem>,
+    imageUrl?: string,
+    meta?: AddMeta
+  ) => void;
   onLog: (method: string, exc: string, detail: string) => void;
 }) {
   const [phase, setPhase] = useState<"idle" | "loading" | "result" | "done">("idle");
@@ -735,7 +766,7 @@ function ChannelB({
 
       try {
         const { base64, mediaType } = await compressImage(file);
-        const res = await fetch("/api/tag-scan", {
+        const res = await authFetch("/api/tag-scan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -745,6 +776,18 @@ function ChannelB({
         });
 
         const data: TagScanResponse = await res.json();
+
+        // Errors from the access gate (daily limit, bad request) carry only an
+        // "error" field. Show them in the existing red error box.
+        if (!res.ok && !data.status) {
+          const errText = (data as any).error || "Scan failed — try again.";
+          setResult({ status: "unreadable", message: errText } as TagScanResponse);
+          setMessage(errText);
+          setPhase("result");
+          onLog("tag_scan", "API_ERROR", errText);
+          return;
+        }
+
         setResult(data);
         setMessage(data.message || "Scan completed, but the result was unexpectedly empty — try again.");
         setPhase("result");
@@ -782,7 +825,7 @@ function ChannelB({
       material: c.material || (result.extracted && result.extracted.composition) || "",
       source_signals: ["tag_scan"],
       badge: "Digitized via Tag",
-    });
+    }, undefined, { raw: result });
     setPhase("done");
     setTimeout(() => {
       setPhase("idle");
@@ -1420,84 +1463,210 @@ function ChannelD({
 
 // ─── Closet Grid ──────────────────────────────────────────────────────────────
 
-function ClosetGrid({ items }: { items: ClosetItem[] }) {
-  const [filter, setFilter] = useState("All");
+function ClosetGrid({
+  items,
+  photoUrls,
+  loadPhoto,
+  saveState,
+  onRemove,
+}: {
+  items: ClosetItem[];
+  photoUrls: Record<string, string>;
+  loadPhoto: (id: string) => void;
+  saveState: Record<string, "saving" | "failed">;
+  onRemove: (item: ClosetItem) => Promise<boolean>;
+}) {
   const [selected, setSelected] = useState<ClosetItem | null>(null);
+  const [view, setViewState] = useState<"folders" | "all">(() => {
+    try {
+      return localStorage.getItem("vestry.closetView") === "all" ? "all" : "folders";
+    } catch {
+      return "folders";
+    }
+  });
+  const [openBucket, setOpenBucket] = useState<Bucket | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
-  const uniqueCats = Array.from(new Set(items.map((i) => i.category)));
-  const allCats = ["All"].concat(uniqueCats);
-  const shown = filter === "All" ? items : items.filter((i) => i.category === filter);
+  // Each newly opened item starts without a pending "remove?" question.
+  useEffect(() => {
+    setConfirmRemove(false);
+  }, [selected]);
+
+  const setView = (v: "folders" | "all") => {
+    setViewState(v);
+    try {
+      localStorage.setItem("vestry.closetView", v);
+    } catch {
+      /* the choice just isn't remembered */
+    }
+  };
+
+  // Opening an item fetches its full-size photo (the grid only loads thumbnails).
+  useEffect(() => {
+    if (selected) loadPhoto(selected.id);
+  }, [selected, loadPhoto]);
+
+  const groups = useMemo(
+    () =>
+      BUCKETS.map((bucket) => ({
+        bucket,
+        list: items.filter((i) => bucketOf(i.category, i.sub_category, i.name) === bucket),
+      })).filter((g) => g.list.length > 0),
+    [items]
+  );
+  const openGroup = openBucket ? groups.find((g) => g.bucket === openBucket) || null : null;
+
+  const renderCard = (item: ClosetItem) => {
+    const color = item.colors[0] ? COLOR_HEX[item.colors[0]] || "#9CA3AF" : "#9CA3AF";
+    const badgeStyle = getBadgeStyle(item.badge);
+    return (
+      <button
+        key={item.id}
+        onClick={() => setSelected(item)}
+        className="text-left rounded-2xl overflow-hidden transition-all"
+        style={{ background: "white", border: "1px solid var(--warm-grey)" }}
+      >
+        {item.imageUrl ? (
+          <img src={item.imageUrl} alt={item.name} className="w-full object-cover" style={{ height: 140 }} />
+        ) : (
+          <div
+            className="w-full flex items-center justify-center"
+            style={{ height: 140, background: color + "15", fontSize: 48 }}
+          >
+            {emojiFor(item.category, item.sub_category, item.name)}
+          </div>
+        )}
+        <div className="p-3">
+          <p className="text-xs font-medium truncate" style={{ color: "var(--ink)" }}>
+            {item.name}
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--mid-grey)" }}>
+            {item.brand}
+          </p>
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {item.colors.map((c) => (
+              <span
+                key={c}
+                className="w-3 h-3 rounded-full border"
+                style={{ background: COLOR_HEX[c] || "#ccc", borderColor: "var(--warm-grey)" }}
+                title={c}
+              />
+            ))}
+          </div>
+          <span className="text-xs px-1.5 py-0.5 rounded-full mt-1.5 inline-block" style={badgeStyle as any}>
+            {item.badge}
+          </span>
+        </div>
+      </button>
+    );
+  };
+
+  // A folder: a small collage of its first items, the bucket name and a count.
+  const renderFolder = (g: { bucket: Bucket; list: ClosetItem[] }) => {
+    const preview = g.list.slice(0, 4);
+    return (
+      <button
+        key={g.bucket}
+        onClick={() => setOpenBucket(g.bucket)}
+        className="text-left rounded-2xl overflow-hidden transition-all"
+        style={{ background: "white", border: "1px solid var(--warm-grey)" }}
+      >
+        <div className="grid grid-cols-2 gap-0.5 p-1.5" style={{ background: "var(--faint)" }}>
+          {[0, 1, 2, 3].map((n) => {
+            const it = preview[n];
+            if (!it) {
+              return (
+                <div key={n} className="rounded-lg" style={{ aspectRatio: "1 / 1", background: "rgba(0,0,0,0.03)" }} />
+              );
+            }
+            const color = it.colors[0] ? COLOR_HEX[it.colors[0]] || "#9CA3AF" : "#9CA3AF";
+            return it.imageUrl ? (
+              <img
+                key={n}
+                src={it.imageUrl}
+                alt=""
+                className="w-full rounded-lg object-cover"
+                style={{ aspectRatio: "1 / 1" }}
+              />
+            ) : (
+              <div
+                key={n}
+                className="w-full rounded-lg flex items-center justify-center"
+                style={{ aspectRatio: "1 / 1", background: color + "22", fontSize: 22 }}
+              >
+                {emojiFor(it.category, it.sub_category, it.name)}
+              </div>
+            );
+          })}
+        </div>
+        <div className="p-3">
+          <p className="serif text-base" style={{ color: "var(--emerald)" }}>
+            {bucketLabel(g.bucket)}
+          </p>
+          <p className="text-xs" style={{ color: "var(--mid-grey)" }}>
+            {g.list.length} {g.list.length === 1 ? "item" : "items"}
+          </p>
+        </div>
+      </button>
+    );
+  };
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
-        {allCats.map((c) => (
-          <button
-            key={c}
-            onClick={() => setFilter(c)}
-            className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full transition-all"
-            style={
-              filter === c
-                ? { background: "var(--emerald)", color: "#F7F4EE" }
-                : { background: "white", border: "1px solid var(--warm-grey)", color: "var(--mid-grey)" }
-            }
-          >
-            {c} ({c === "All" ? items.length : items.filter((i) => i.category === c).length})
-          </button>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {shown.map((item) => {
-          const color = item.colors[0] ? COLOR_HEX[item.colors[0]] || "#9CA3AF" : "#9CA3AF";
-          const badgeStyle = getBadgeStyle(item.badge);
-          return (
+      <div className="flex items-center justify-between">
+        <div className="inline-flex rounded-full p-0.5" style={{ background: "var(--faint)" }}>
+          {([["folders", "Folders"], ["all", "All items"]] as const).map((opt) => (
             <button
-              key={item.id}
-              onClick={() => setSelected(item)}
-              className="text-left rounded-2xl overflow-hidden transition-all"
-              style={{ background: "white", border: "1px solid var(--warm-grey)" }}
+              key={opt[0]}
+              onClick={() => setView(opt[0])}
+              className="text-xs px-3 py-1.5 rounded-full transition-all"
+              style={
+                view === opt[0]
+                  ? { background: "white", color: "var(--emerald)", boxShadow: "0 1px 2px rgba(0,0,0,0.08)" }
+                  : { color: "var(--mid-grey)" }
+              }
             >
-              {item.imageUrl ? (
-                <img src={item.imageUrl} alt={item.name} className="w-full object-cover" style={{ height: 140 }} />
-              ) : (
-                <div
-                  className="w-full flex items-center justify-center"
-                  style={{ height: 140, background: color + "15", fontSize: 48 }}
-                >
-                  {CATEGORY_ICONS[item.category] || "👗"}
-                </div>
-              )}
-              <div className="p-3">
-                <p className="text-xs font-medium truncate" style={{ color: "var(--ink)" }}>
-                  {item.name}
-                </p>
-                <p className="text-xs mt-0.5" style={{ color: "var(--mid-grey)" }}>
-                  {item.brand}
-                </p>
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {item.colors.map((c) => (
-                    <span
-                      key={c}
-                      className="w-3 h-3 rounded-full border"
-                      style={{ background: COLOR_HEX[c] || "#ccc", borderColor: "var(--warm-grey)" }}
-                      title={c}
-                    />
-                  ))}
-                </div>
-                <span className="text-xs px-1.5 py-0.5 rounded-full mt-1.5 inline-block" style={badgeStyle as any}>
-                  {item.badge}
-                </span>
-              </div>
+              {opt[1]}
             </button>
-          );
-        })}
+          ))}
+        </div>
+        <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
+          {items.length} items
+        </span>
       </div>
 
-      {shown.length === 0 && (
+      {items.length > 0 && view === "folders" && !openGroup && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{groups.map(renderFolder)}</div>
+      )}
+
+      {items.length > 0 && view === "folders" && openGroup && (
+        <div className="space-y-3">
+          <button
+            onClick={() => setOpenBucket(null)}
+            className="text-xs flex items-center gap-1"
+            style={{ color: "var(--emerald)" }}
+          >
+            ← All folders
+          </button>
+          <p className="serif text-lg" style={{ color: "var(--emerald)" }}>
+            {bucketLabel(openGroup.bucket)}{" "}
+            <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
+              ({openGroup.list.length})
+            </span>
+          </p>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{openGroup.list.map(renderCard)}</div>
+        </div>
+      )}
+
+      {items.length > 0 && view === "all" && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{items.map(renderCard)}</div>
+      )}
+
+      {items.length === 0 && (
         <div className="text-center py-12" style={{ color: "var(--mid-grey)" }}>
           <Layers size={28} className="mx-auto mb-2 opacity-30" />
-          <p className="text-sm">No items in this category yet</p>
+          <p className="text-sm">Your closet is empty so far. Use Add to bring in your first piece.</p>
         </div>
       )}
 
@@ -1518,7 +1687,7 @@ function ClosetGrid({ items }: { items: ClosetItem[] }) {
             </button>
             {selected.imageUrl ? (
               <img
-                src={selected.imageUrl}
+                src={photoUrls[selected.id] || selected.imageUrl}
                 alt={selected.name}
                 className="w-full rounded-2xl object-cover mb-4"
                 style={{ height: 200 }}
@@ -1528,7 +1697,7 @@ function ClosetGrid({ items }: { items: ClosetItem[] }) {
                 className="w-full rounded-2xl flex items-center justify-center mb-4"
                 style={{ height: 160, background: "var(--faint)", fontSize: 64 }}
               >
-                {CATEGORY_ICONS[selected.category] || "👗"}
+                {emojiFor(selected.category, selected.sub_category, selected.name)}
               </div>
             )}
             <h3 className="serif text-xl" style={{ color: "var(--emerald)" }}>
@@ -1574,6 +1743,53 @@ function ClosetGrid({ items }: { items: ClosetItem[] }) {
             <p className="text-xs mt-3" style={{ color: "var(--mid-grey)" }}>
               Added {new Date(selected.addedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
             </p>
+            <div className="mt-6 pt-4" style={{ borderTop: "1px solid var(--warm-grey)" }}>
+              {confirmRemove ? (
+                <div className="space-y-2">
+                  <p className="text-xs" style={{ color: "var(--ink)" }}>
+                    Remove this item from your closet?
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setConfirmRemove(false)}
+                      disabled={removing}
+                      className="flex-1 text-xs py-2 rounded-xl"
+                      style={{ border: "1px solid var(--warm-grey)", color: "var(--mid-grey)" }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setRemoving(true);
+                        const removed = await onRemove(selected);
+                        setRemoving(false);
+                        if (removed) {
+                          setConfirmRemove(false);
+                          setSelected(null);
+                        }
+                      }}
+                      disabled={removing}
+                      className="flex-1 text-xs py-2 rounded-xl"
+                      style={{ background: "#B91C1C", color: "white" }}
+                    >
+                      {removing ? "Removing…" : "Remove"}
+                    </button>
+                  </div>
+                </div>
+              ) : saveState[selected.id] === "saving" ? (
+                <p className="text-xs" style={{ color: "var(--mid-grey)" }}>
+                  Saving… you can remove this item once it is saved.
+                </p>
+              ) : (
+                <button
+                  onClick={() => setConfirmRemove(true)}
+                  className="text-xs underline"
+                  style={{ color: "#B91C1C" }}
+                >
+                  Remove from closet
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1583,23 +1799,93 @@ function ClosetGrid({ items }: { items: ClosetItem[] }) {
 
 // ─── Stylist Chat ─────────────────────────────────────────────────────────────
 
+// One outfit option drawn as a board of the user's own pieces. Items the user
+// does not own yet appear as dashed "to add" tiles.
+function OutfitBoard({ outfit, byId }: { outfit: Outfit; byId: Map<string, ClosetItem> }) {
+  const pieces = outfit.itemIds
+    .map((id) => byId.get(id))
+    .filter((i): i is ClosetItem => Boolean(i))
+    .sort(
+      (a, b) =>
+        BUCKETS.indexOf(bucketOf(a.category, a.sub_category, a.name)) -
+        BUCKETS.indexOf(bucketOf(b.category, b.sub_category, b.name))
+    );
+  if (pieces.length === 0 && outfit.missing.length === 0) return null;
+  return (
+    <div className="rounded-2xl p-3 fade-in" style={{ background: "white", border: "1px solid var(--warm-grey)" }}>
+      <p className="serif text-base" style={{ color: "var(--emerald)" }}>
+        {outfit.title}
+      </p>
+      {outfit.note && (
+        <p className="text-xs mt-0.5 mb-2.5" style={{ color: "var(--mid-grey)" }}>
+          {outfit.note}
+        </p>
+      )}
+      <div className="grid grid-cols-3 gap-2">
+        {pieces.map((item) => {
+          const color = item.colors[0] ? COLOR_HEX[item.colors[0]] || "#9CA3AF" : "#9CA3AF";
+          return (
+            <div key={item.id}>
+              {item.imageUrl ? (
+                <img
+                  src={item.imageUrl}
+                  alt={item.name}
+                  className="w-full rounded-xl object-cover"
+                  style={{ aspectRatio: "1 / 1" }}
+                />
+              ) : (
+                <div
+                  className="w-full rounded-xl flex items-center justify-center"
+                  style={{ aspectRatio: "1 / 1", background: color + "22", fontSize: 34 }}
+                >
+                  {emojiFor(item.category, item.sub_category, item.name)}
+                </div>
+              )}
+              <p className="text-xs mt-1 truncate" style={{ color: "var(--ink)" }}>
+                {item.name}
+              </p>
+            </div>
+          );
+        })}
+        {outfit.missing.map((label) => (
+          <div key={label}>
+            <div
+              className="w-full rounded-xl flex items-center justify-center text-center px-2"
+              style={{
+                aspectRatio: "1 / 1",
+                border: "1.5px dashed var(--warm-grey)",
+                color: "var(--mid-grey)",
+                fontSize: 11,
+              }}
+            >
+              {label}
+            </div>
+            <p className="text-xs mt-1" style={{ color: "var(--mid-grey)" }}>
+              To add
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StylistChat({ items }: { items: ClosetItem[] }) {
-  const [messages, setMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([
+  const byId = useMemo(() => new Map(items.map((i) => [i.id, i] as [string, ClosetItem])), [items]);
+  const [messages, setMessages] = useState<{ role: "user" | "assistant"; content: string; outfits?: Outfit[] }[]>([
     {
       role: "assistant",
       content:
-        "Good to meet you. I've looked through your " +
-        items.length +
-        " pieces — you've got a strong neutral foundation to work with. What are you dressing for?",
+        items.length === 0
+          ? "Good to meet you. Your closet is empty so far — add a few pieces and I'll start styling with them. What are you dressing for?"
+          : "Good to meet you. I've looked through your " +
+            items.length +
+            " pieces — you've got a strong neutral foundation to work with. What are you dressing for?",
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
-
-  const closetContext = items
-    .map((i) => "- " + i.name + " (" + i.category + ", " + i.colors.join("/") + ", " + i.brand + ")")
-    .join("\n");
 
   const send = async () => {
     if (!input.trim() || loading) return;
@@ -1610,16 +1896,22 @@ function StylistChat({ items }: { items: ClosetItem[] }) {
     setLoading(true);
 
     try {
-      const res = await fetch("/api/chat", {
+      const res = await authFetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: newMessages,
-          closetContext: closetContext,
+          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
         }),
       });
       const data = await res.json();
-      setMessages((prev) => prev.concat([{ role: "assistant", content: data.message }]));
+      const reply: string = res.ok
+        ? data.message
+        : data.error || "I'm having trouble connecting — try again in a moment.";
+      const outfits: Outfit[] = res.ok && Array.isArray(data.outfits) ? data.outfits : [];
+      if (outfits.length > 0) track("recommendation_opened", { outfits: outfits.length });
+      setMessages((prev) =>
+        prev.concat([{ role: "assistant", content: reply || "Here are a few ideas.", outfits }])
+      );
     } catch {
       setMessages((prev) =>
         prev.concat([{ role: "assistant", content: "I'm having trouble connecting — try again in a moment." }])
@@ -1635,7 +1927,8 @@ function StylistChat({ items }: { items: ClosetItem[] }) {
     <div className="flex flex-col" style={{ height: "calc(100vh - 200px)", minHeight: 400 }}>
       <div className="flex-1 overflow-y-auto space-y-3 pb-4">
         {messages.map((m, i) => (
-          <div key={i} className={"flex " + (m.role === "user" ? "justify-end" : "gap-2.5") + " fade-in"}>
+          <div key={i} className="space-y-2.5">
+          <div className={"flex " + (m.role === "user" ? "justify-end" : "gap-2.5") + " fade-in"}>
             {m.role === "assistant" && (
               <div
                 className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center"
@@ -1659,6 +1952,14 @@ function StylistChat({ items }: { items: ClosetItem[] }) {
             >
               {m.content}
             </div>
+          </div>
+          {m.outfits && m.outfits.length > 0 && (
+            <div className="pl-10 space-y-2.5">
+              {m.outfits.map((o, k) => (
+                <OutfitBoard key={k} outfit={o} byId={byId} />
+              ))}
+            </div>
+          )}
           </div>
         ))}
         {loading && (
@@ -1812,39 +2113,246 @@ function Analytics({ items, logs }: { items: ClosetItem[]; logs: AdminLog[] }) {
 
 export default function App() {
   const [user, setUser] = useState<string | null>(null);
-  const [items, setItems] = useState<ClosetItem[]>(SEED_ITEMS);
+  const [userId, setUserId] = useState<string | null>(null);
+  // What the signed-in person should see before the closet: deletion screen,
+  // consent, intro questions, or the app itself.
+  const [gate, setGate] = useState<"loading" | "deleting" | "consent" | "onboarding" | "ready" | "error">("loading");
+  const [account, setAccount] = useState<AccountStatus | null>(null);
+  const [prof, setProf] = useState<ProfileResponse | null>(null);
+  const [editingAnswers, setEditingAnswers] = useState(false);
+  // Opened from a password-reset email: ask for the new password first.
+  const [recovering, setRecovering] = useState(OPENED_FROM_RECOVERY_LINK);
+  const [items, setItems] = useState<ClosetItem[]>([]);
   const [logs, setLogs] = useState<AdminLog[]>([]);
   const [tab, setTab] = useState<Tab>("closet");
   const [channel, setChannel] = useState<Channel>("A");
+  const [authReady, setAuthReady] = useState(false);
+  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const [saveState, setSaveState] = useState<Record<string, "saving" | "failed">>({});
+  const [closetError, setClosetError] = useState("");
+  const pendingRef = useRef<Map<string, { item: ClosetItem; meta: AddMeta }>>(new Map());
+  const inFlightRef = useRef<Set<string>>(new Set());
+  const saveFailLogRef = useRef<Map<string, string>>(new Map());
+  const photoInFlightRef = useRef<Set<string>>(new Set());
+  const loadPhoto = useCallback((id: string) => {
+    if (photoInFlightRef.current.has(id)) return;
+    photoInFlightRef.current.add(id);
+    getPhotoUrl(id)
+      .then((url) => {
+        if (url) setPhotoUrls((prev) => ({ ...prev, [id]: url }));
+      })
+      .catch(() => {})
+      .finally(() => {
+        photoInFlightRef.current.delete(id);
+      });
+  }, []);
 
-  const addItem = (partial: Partial<ClosetItem>, imageUrl?: string) => {
-    setItems((prev) =>
-      [
-        {
-          id: genId(),
-          name: partial.name || "Item",
-          category: partial.category || "Top",
-          sub_category: partial.sub_category || "",
-          sub_category_confidence: partial.sub_category_confidence || "high",
-          colors: partial.colors || ["Black"],
-          pattern: partial.pattern || "Solid",
-          fit: partial.fit !== undefined ? partial.fit : null,
-          brand: partial.brand || "Unknown",
-          material: partial.material || "",
-          source_signals: partial.source_signals || ["manual"],
-          badge: partial.badge || "Manually Cataloged",
-          imageUrl: imageUrl,
-          addedAt: new Date().toISOString(),
-        },
-      ].concat(prev)
-    );
+  // The signed-in user comes from Supabase. When the session ends (sign-out or
+  // an expired login), clear everything held in memory so the next person who
+  // signs in on this browser never sees the previous user's closet.
+  useEffect(() => {
+    const displayName = (email?: string | null) =>
+      email ? email.split("@")[0] : null;
+
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(displayName(data.session?.user.email));
+      setUserId(data.session?.user.id ?? null);
+      setAuthReady(true);
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") setRecovering(true);
+      setUser(displayName(session?.user.email));
+      setUserId(session?.user.id ?? null);
+      if (!session) {
+        setRecovering(false);
+        resetTracking();
+        setGate("loading");
+        setAccount(null);
+        setProf(null);
+        setEditingAnswers(false);
+        setItems([]);
+        setPhotoUrls({});
+        setSaveState({});
+        setClosetError("");
+        pendingRef.current.clear();
+        inFlightRef.current.clear();
+        saveFailLogRef.current.clear();
+        setLogs([]);
+        setTab("closet");
+        setChannel("A");
+      }
+    });
+
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // Decide which screen a signed-in person sees first. The account route is
+  // the one route a locked (deleting) account can still use, so it goes first.
+  const loadGate = useCallback(async () => {
+    try {
+      const acc = await getAccount();
+      setAccount(acc);
+      if (acc.deletionRequestedAt) {
+        setGate("deleting");
+        return;
+      }
+      if (!acc.aiConsent) {
+        setGate("consent");
+        return;
+      }
+      const p = await getProfile();
+      setProf(p);
+      setGate(p.profile?.onboarding_completed_at ? "ready" : "onboarding");
+    } catch {
+      setGate("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    identify(userId);
+    track("session_start");
+    setGate("loading");
+    void loadGate();
+  }, [userId, loadGate]);
+
+  // Any route answering "account_deleting" sends the person to that screen.
+  useEffect(() => {
+    const onDeleting = () => void loadGate();
+    window.addEventListener(ACCOUNT_DELETING_EVENT, onDeleting);
+    return () => window.removeEventListener(ACCOUNT_DELETING_EVENT, onDeleting);
+  }, [loadGate]);
+
+  // Load the saved closet from the server once the person is through the gate.
+  useEffect(() => {
+    if (!user || gate !== "ready") return;
+    let cancelled = false;
+    setClosetError("");
+    loadCloset()
+      .then(({ items: loaded }) => {
+        if (cancelled) return;
+        const loadedIds = new Set(loaded.map((i) => i.id));
+        setItems((prev) => [
+          ...prev.filter((i) => pendingRef.current.has(i.id) && !loadedIds.has(i.id)),
+          ...loaded,
+        ]);
+      })
+      .catch(() => {
+        if (!cancelled) setClosetError("Couldn't load your saved closet. Please refresh the page.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, gate]);
+
+  // Ask before closing the tab while an item is still being saved.
+  useEffect(() => {
+    if (Object.keys(saveState).length === 0) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [saveState]);
+
+  // Saves one item to the server. Failed saves stay in memory with a Retry
+  // button, so the user never silently loses work.
+  const persist = async (item: ClosetItem, meta: AddMeta) => {
+    if (inFlightRef.current.has(item.id)) return; // already being saved
+    inFlightRef.current.add(item.id);
+    pendingRef.current.set(item.id, { item, meta });
+    setSaveState((prev) => ({ ...prev, [item.id]: "saving" }));
+    try {
+      await saveItem(item, meta);
+      track("item_saved", { channel: item.source_signals[0] || "manual" });
+      pendingRef.current.delete(item.id);
+      setSaveState((prev) => {
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
+      // The item is saved now, so its failure entry (if any) no longer counts.
+      const failLogId = saveFailLogRef.current.get(item.id);
+      if (failLogId) {
+        saveFailLogRef.current.delete(item.id);
+        setLogs((prev) => prev.filter((l) => l.id !== failLogId));
+      }
+    } catch (err: any) {
+      setSaveState((prev) => ({ ...prev, [item.id]: "failed" }));
+      // One entry per item, however many times a retry fails.
+      if (!saveFailLogRef.current.has(item.id)) {
+        const failLogId = addLog("save_item", "SAVE_FAILED", String(err?.message || "Save failed"));
+        saveFailLogRef.current.set(item.id, failLogId);
+      }
+    } finally {
+      inFlightRef.current.delete(item.id);
+    }
   };
 
-  const addLog = (method: string, exception: string, detail: string) => {
+  const retryUnsaved = () => {
+    pendingRef.current.forEach(({ item, meta }) => {
+      void persist(item, meta);
+    });
+  };
+
+  // Removes an item. A saved item is soft-deleted on the server first; an item
+  // that never saved is simply discarded. Returns whether the item is gone.
+  const removeItem = async (item: ClosetItem): Promise<boolean> => {
+    const unsaved = pendingRef.current.has(item.id);
+    if (unsaved && inFlightRef.current.has(item.id)) return false; // still saving
+    if (!unsaved) {
+      try {
+        await deleteItem(item.id);
+      } catch {
+        setClosetError("Couldn't remove the item. Please try again.");
+        setTimeout(() => setClosetError(""), 6000);
+        return false;
+      }
+    }
+    pendingRef.current.delete(item.id);
+    setSaveState((prev) => {
+      const next = { ...prev };
+      delete next[item.id];
+      return next;
+    });
+    const failLogId = saveFailLogRef.current.get(item.id);
+    if (failLogId) {
+      saveFailLogRef.current.delete(item.id);
+      setLogs((prev) => prev.filter((l) => l.id !== failLogId));
+    }
+    setItems((prev) => prev.filter((i) => i.id !== item.id));
+    return true;
+  };
+
+  const addItem = (partial: Partial<ClosetItem>, imageUrl?: string, meta?: AddMeta) => {
+    const item: ClosetItem = {
+      id: newItemId(),
+      name: partial.name || "Item",
+      category: partial.category || "Top",
+      sub_category: partial.sub_category || "",
+      sub_category_confidence: partial.sub_category_confidence || "high",
+      colors: partial.colors || ["Black"],
+      pattern: partial.pattern || "Solid",
+      fit: partial.fit !== undefined ? partial.fit : null,
+      brand: partial.brand || "Unknown",
+      material: partial.material || "",
+      source_signals: partial.source_signals || ["manual"],
+      badge: partial.badge || "Manually Cataloged",
+      imageUrl: imageUrl,
+      addedAt: new Date().toISOString(),
+    };
+    setItems((prev) => [item, ...prev]);
+    void persist(item, meta || {});
+  };
+
+  const addLog = (method: string, exception: string, detail: string): string => {
+    const logId = genLogId();
     setLogs((prev) =>
       [
         {
-          id: genLogId(),
+          id: logId,
           ts: new Date().toISOString(),
           method: method,
           exception: exception,
@@ -1852,9 +2360,69 @@ export default function App() {
         },
       ].concat(prev)
     );
+    return logId;
   };
 
-  if (!user) return <OnboardScreen onEnter={setUser} />;
+  if (!authReady) {
+    return <div className="min-h-screen" style={{ background: "#1A3028" }} />;
+  }
+  if (!user) return <LoginScreen />;
+
+  if (recovering) {
+    return (
+      <SetNewPassword
+        onDone={() => {
+          track("password_changed", { via: "reset_link" });
+          setRecovering(false);
+        }}
+      />
+    );
+  }
+
+  const signOut = () => void supabase.auth.signOut();
+
+  if (gate === "loading") {
+    return <div className="min-h-screen" style={{ background: "var(--parchment)" }} />;
+  }
+  if (gate === "error") {
+    return (
+      <Page>
+        <Title sub="Check your connection and try again.">Couldn't load your account</Title>
+        <Primary onClick={() => { setGate("loading"); void loadGate(); }}>Try again</Primary>
+        <Secondary onClick={signOut}>Sign out</Secondary>
+      </Page>
+    );
+  }
+  if (gate === "deleting") {
+    return (
+      <DeletionPending
+        deleteOn={account?.deleteOn ?? null}
+        onCancelled={() => { setGate("loading"); void loadGate(); }}
+        onSignOut={signOut}
+      />
+    );
+  }
+  if (gate === "consent") {
+    return <ConsentScreen onDone={() => { setGate("loading"); void loadGate(); }} onSignOut={signOut} />;
+  }
+  if (gate === "onboarding" || editingAnswers) {
+    return (
+      <Onboarding
+        initial={prof?.profile ?? null}
+        initialMeasurements={prof?.measurements ?? null}
+        editing={editingAnswers}
+        onCancel={editingAnswers ? () => setEditingAnswers(false) : undefined}
+        onDone={() => {
+          setEditingAnswers(false);
+          setGate("loading");
+          void loadGate();
+        }}
+      />
+    );
+  }
+
+  const isAdmin = prof?.isAdmin === true;
+  const greetingName = prof?.profile?.first_name || user;
 
   const CHANNELS_CONFIG = [
     { id: "A" as Channel, label: "Camera", sub: "AI Vision QC", Icon: Camera },
@@ -1863,11 +2431,18 @@ export default function App() {
     { id: "D" as Channel, label: "Manual", sub: "Category picker", Icon: PenLine },
   ];
 
+  // The Logs tab is for the admin only (server-managed flag).
   const NAV = [
     { id: "closet" as Tab, label: "Closet", Icon: Grid3X3 },
     { id: "add" as Tab, label: "Add Item", Icon: Plus },
     { id: "stylist" as Tab, label: "Stylist", Icon: MessageCircle },
-    { id: "logs" as Tab, label: "Logs", Icon: Terminal },
+    ...(isAdmin
+      ? [
+          { id: "logs" as Tab, label: "Logs", Icon: Terminal },
+          { id: "requests" as Tab, label: "Requests", Icon: Users },
+        ]
+      : []),
+    { id: "settings" as Tab, label: "Settings", Icon: SettingsIcon },
   ];
 
   const PAGE: Record<Tab, { h: string; sub: string }> = {
@@ -1875,6 +2450,8 @@ export default function App() {
     add: { h: "Add an Item", sub: "Choose ingestion channel" },
     stylist: { h: "AI Stylist", sub: "Wardrobe intelligence" },
     logs: { h: "Admin Logs", sub: logs.length + " exception" + (logs.length !== 1 ? "s" : "") },
+    settings: { h: "Settings", sub: "Your account and answers" },
+    requests: { h: "Access requests", sub: "Waiting list — admin only" },
   };
 
   return (
@@ -1897,7 +2474,7 @@ export default function App() {
                 Digital Closet
               </span>
               <span className="text-xs ml-2" style={{ color: "var(--mid-grey)" }}>
-                — {user}
+                — {greetingName}
               </span>
             </div>
           </div>
@@ -1913,9 +2490,39 @@ export default function App() {
                 <span className="hidden sm:inline">{n.label}</span>
               </button>
             ))}
+            <button
+              onClick={() => supabase.auth.signOut()}
+              title="Sign out"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-all"
+              style={{ color: "var(--mid-grey)" }}
+            >
+              <LogOut size={12} />
+              <span className="hidden sm:inline">Sign out</span>
+            </button>
           </nav>
         </div>
       </header>
+
+      {(closetError || Object.keys(saveState).length > 0) && (
+        <div className="max-w-2xl w-full mx-auto px-4 pt-3">
+          <div
+            className="rounded-xl px-4 py-3 text-xs flex items-center justify-between gap-3"
+            style={{ background: "#FDF3E3", border: "1px solid #E8CFA0", color: "#6B4E16" }}
+          >
+            <span>
+              {closetError ||
+                (Object.values(saveState).includes("failed")
+                  ? "Some items are not saved yet — check your connection."
+                  : "Saving…")}
+            </span>
+            {!closetError && Object.values(saveState).includes("failed") && (
+              <button onClick={retryUnsaved} className="underline font-medium">
+                Retry
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-6 pb-8">
         <div className="mb-5">
@@ -1929,8 +2536,15 @@ export default function App() {
 
         {tab === "closet" && (
           <>
-            <Analytics items={items} logs={logs} />
-            <ClosetGrid items={items} />
+            {account && <InviteCard invites={account.invites} />}
+            {isAdmin && <Analytics items={items} logs={logs} />}
+            <ClosetGrid
+              items={items}
+              photoUrls={photoUrls}
+              loadPhoto={loadPhoto}
+              saveState={saveState}
+              onRemove={removeItem}
+            />
           </>
         )}
 
@@ -1964,7 +2578,20 @@ export default function App() {
         )}
 
         {tab === "stylist" && <StylistChat items={items} />}
-        {tab === "logs" && <AdminLogs logs={logs} />}
+        {tab === "logs" && isAdmin && <AdminLogs logs={logs} />}
+        {tab === "requests" && isAdmin && <AccessRequests />}
+        {tab === "settings" && account && (
+          <Settings
+            account={account}
+            profile={prof?.profile ?? null}
+            measurements={prof?.measurements ?? null}
+            onMeasurementsDeleted={() => void loadGate()}
+            onEditAnswers={() => setEditingAnswers(true)}
+            onConsentWithdrawn={() => { setGate("loading"); void loadGate(); }}
+            onDeletionRequested={() => void supabase.auth.signOut()}
+            onSignOut={signOut}
+          />
+        )}
       </main>
 
       <nav
@@ -1975,7 +2602,7 @@ export default function App() {
           borderTop: "1px solid var(--warm-grey)",
         }}
       >
-        <div className="grid grid-cols-4 gap-1">
+        <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(" + NAV.length + ", minmax(0, 1fr))" }}>
           {NAV.map((n) => (
             <button
               key={n.id}
