@@ -52,6 +52,9 @@ import { AccessRequests } from "./screens/AccessRequests";
 import type { Bucket } from "./lib/taxonomy";
 import { COLOR_HEX } from "./lib/itemStyle";
 import { ItemTile } from "./components/closet/ItemTile";
+import { ClosetByCategory } from "./components/closet/ClosetByCategory";
+import { ClosetViewToggle } from "./components/closet/ClosetViewToggle";
+import type { ClosetView } from "./components/closet/ClosetViewToggle";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1447,13 +1450,8 @@ function ClosetGrid({
   onRemove: (item: ClosetItem) => Promise<boolean>;
 }) {
   const [selected, setSelected] = useState<ClosetItem | null>(null);
-  const [view, setViewState] = useState<"folders" | "all">(() => {
-    try {
-      return localStorage.getItem("vestry.closetView") === "all" ? "all" : "folders";
-    } catch {
-      return "folders";
-    }
-  });
+  // Always opens on "By category"; the choice is not remembered (trial P4).
+  const [view, setView] = useState<ClosetView>("category");
   const [openBucket, setOpenBucket] = useState<Bucket | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -1462,15 +1460,6 @@ function ClosetGrid({
   useEffect(() => {
     setConfirmRemove(false);
   }, [selected]);
-
-  const setView = (v: "folders" | "all") => {
-    setViewState(v);
-    try {
-      localStorage.setItem("vestry.closetView", v);
-    } catch {
-      /* the choice just isn't remembered */
-    }
-  };
 
   // Opening an item fetches its full-size photo (the grid only loads thumbnails).
   useEffect(() => {
@@ -1542,49 +1531,13 @@ function ClosetGrid({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <div className="inline-flex rounded-full p-0.5" style={{ background: "var(--faint)" }}>
-          {([["folders", "Folders"], ["all", "All items"]] as const).map((opt) => (
-            <button
-              key={opt[0]}
-              onClick={() => setView(opt[0])}
-              className="text-xs px-3 py-1.5 rounded-full transition-all"
-              style={
-                view === opt[0]
-                  ? { background: "white", color: "var(--emerald)", boxShadow: "0 1px 2px rgba(0,0,0,0.08)" }
-                  : { color: "var(--mid-grey)" }
-              }
-            >
-              {opt[1]}
-            </button>
-          ))}
-        </div>
+        <ClosetViewToggle value={view} onChange={setView} />
         <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
           {items.length} items
         </span>
       </div>
 
-      {items.length > 0 && view === "folders" && !openGroup && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{groups.map(renderFolder)}</div>
-      )}
-
-      {items.length > 0 && view === "folders" && openGroup && (
-        <div className="space-y-3">
-          <button
-            onClick={() => setOpenBucket(null)}
-            className="text-xs flex items-center gap-1"
-            style={{ color: "var(--emerald)" }}
-          >
-            ← All folders
-          </button>
-          <p className="serif text-lg" style={{ color: "var(--emerald)" }}>
-            {bucketLabel(openGroup.bucket)}{" "}
-            <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
-              ({openGroup.list.length})
-            </span>
-          </p>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{openGroup.list.map(renderCard)}</div>
-        </div>
-      )}
+      {items.length > 0 && view === "category" && <ClosetByCategory items={items} onSelect={setSelected} />}
 
       {items.length > 0 && view === "all" && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{items.map(renderCard)}</div>
