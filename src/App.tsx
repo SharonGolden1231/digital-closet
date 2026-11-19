@@ -166,6 +166,56 @@ const MANUAL_CATEGORIES = [
   },
 ];
 
+// Returns the canonical taxonomy spelling for a category (case-insensitive),
+// or null when it is blank or outside the taxonomy.
+function canonicalCategory(raw: string | null | undefined): string | null {
+  const key = (raw || "").trim().toLowerCase();
+  if (!key) return null;
+  const match = MANUAL_CATEGORIES.find((c) => c.category.toLowerCase() === key);
+  return match ? match.category : null;
+}
+
+// Shown when a scan returns no usable category: the user must pick one
+// before "Add to Closet" is enabled.
+function CategoryPicker({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (category: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <p className="text-xs uppercase tracking-widest font-medium" style={{ color: "var(--mid-grey)" }}>
+        Pick a category to continue
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        {MANUAL_CATEGORIES.map((cat) => {
+          const selected = value === cat.category;
+          return (
+            <button
+              key={cat.category}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => onChange(cat.category)}
+              className="flex items-center gap-3 p-3 rounded-xl text-left transition-all"
+              style={{
+                background: selected ? "var(--success-bg)" : "white",
+                border: "1px solid " + (selected ? "var(--emerald)" : "var(--warm-grey)"),
+              }}
+            >
+              <span className="text-2xl">{CATEGORY_ICONS[cat.category] || "👗"}</span>
+              <span className="text-sm font-medium" style={{ color: "var(--ink)" }}>
+                {cat.category}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const COLORS_LIST = [
   "Black", "White", "Navy", "Grey", "Beige", "Brown", "Red", "Pink",
   "Orange", "Yellow", "Green", "Blue", "Purple", "Cream", "Olive",
@@ -457,7 +507,10 @@ function ChannelA({
   const [preview, setPreview] = useState<string | null>(null);
   const [result, setResult] = useState<ClassifyResponse | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [pickedCategory, setPickedCategory] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const classifiedCategory = result ? canonicalCategory(result.category) : null;
+  const category = classifiedCategory || pickedCategory;
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -470,6 +523,7 @@ function ChannelA({
       const objectUrl = URL.createObjectURL(file);
       setPreview(objectUrl);
       setPhotoFile(file);
+      setPickedCategory(null);
       setPhase("loading");
       setMessage("Evaluating image quality…");
 
@@ -525,12 +579,12 @@ function ChannelA({
   );
 
   const confirmAdd = () => {
-    if (!result) return;
+    if (!result || !category) return;
     const colorLabel = result.colors && result.colors[0] ? result.colors[0] : "";
     onAddItem(
       {
         name: result.name || result.sub_category + " (" + colorLabel + ")",
-        category: result.category,
+        category: category,
         sub_category: result.sub_category,
         sub_category_confidence: result.sub_category_confidence,
         colors: result.colors,
@@ -549,6 +603,7 @@ function ChannelA({
       setPhase("idle");
       setPreview(null);
       setResult(null);
+      setPickedCategory(null);
       setMessage("");
     }, 2000);
   };
@@ -557,6 +612,7 @@ function ChannelA({
     setPhase("idle");
     setPreview(null);
     setResult(null);
+    setPickedCategory(null);
     setMessage("");
   };
 
@@ -693,7 +749,7 @@ function ChannelA({
             <div className="grid grid-cols-2 gap-y-2 gap-x-4">
               {[
                 ["Name", result.name],
-                ["Category", result.category + " → " + result.sub_category],
+                ["Category", (category || "—") + " → " + result.sub_category],
                 ["Colors", result.colors ? result.colors.join(", ") : ""],
                 ["Pattern", result.pattern],
                 ["Fit", result.fit || "—"],
@@ -716,10 +772,19 @@ function ChannelA({
               </p>
             )}
           </div>
+          {!classifiedCategory && (
+            <CategoryPicker value={pickedCategory} onChange={setPickedCategory} />
+          )}
           <button
             onClick={confirmAdd}
+            disabled={!category}
             className="w-full py-3 rounded-xl text-sm font-medium"
-            style={{ background: "var(--emerald)", color: "#F7F4EE" }}
+            style={{
+              background: "var(--emerald)",
+              color: "#F7F4EE",
+              opacity: category ? 1 : 0.4,
+              cursor: category ? "pointer" : "not-allowed",
+            }}
           >
             Add to Closet ✓
           </button>
@@ -755,12 +820,17 @@ function ChannelB({
   const [preview, setPreview] = useState<string | null>(null);
   const [result, setResult] = useState<TagScanResponse | null>(null);
   const [message, setMessage] = useState("");
+  const [pickedCategory, setPickedCategory] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const classifiedCategory =
+    result && result.classification ? canonicalCategory(result.classification.category) : null;
+  const category = classifiedCategory || pickedCategory;
 
   const handleFile = useCallback(
     async (file: File) => {
       const objectUrl = URL.createObjectURL(file);
       setPreview(objectUrl);
+      setPickedCategory(null);
       setPhase("loading");
       setMessage("Reading tag…");
 
@@ -812,10 +882,11 @@ function ChannelB({
       onLog("tag_scan", "MISSING_CLASSIFICATION", "confirmAdd called with no classification data");
       return;
     }
+    if (!category) return;
     const c = result.classification;
     onAddItem({
       name: c.name || c.sub_category + " (Tag Scan)",
-      category: c.category,
+      category: category,
       sub_category: c.sub_category,
       sub_category_confidence: c.sub_category_confidence,
       colors: c.colors,
@@ -831,6 +902,7 @@ function ChannelB({
       setPhase("idle");
       setPreview(null);
       setResult(null);
+      setPickedCategory(null);
       setMessage("");
     }, 2000);
   };
@@ -839,6 +911,7 @@ function ChannelB({
     setPhase("idle");
     setPreview(null);
     setResult(null);
+    setPickedCategory(null);
     setMessage("");
   };
 
@@ -1021,7 +1094,7 @@ function ChannelB({
                       Classification
                     </p>
                     {[
-                      ["Category", result.classification.category + " → " + result.classification.sub_category],
+                      ["Category", (category || "—") + " → " + result.classification.sub_category],
                       ["Colors", result.classification.colors ? result.classification.colors.join(", ") : ""],
                       ["Pattern", result.classification.pattern],
                       ["Fit", result.classification.fit || "—"],
@@ -1054,10 +1127,20 @@ function ChannelB({
                 )}
               </div>
 
+              {result.classification && !classifiedCategory && (
+                <CategoryPicker value={pickedCategory} onChange={setPickedCategory} />
+              )}
+
               <button
                 onClick={confirmAdd}
+                disabled={!!result.classification && !category}
                 className="w-full py-3 rounded-xl text-sm font-medium"
-                style={{ background: "var(--emerald)", color: "#F7F4EE" }}
+                style={{
+                  background: "var(--emerald)",
+                  color: "#F7F4EE",
+                  opacity: !result.classification || category ? 1 : 0.4,
+                  cursor: !result.classification || category ? "pointer" : "not-allowed",
+                }}
               >
                 Add to Closet ✓
               </button>
@@ -1264,7 +1347,7 @@ function ChannelD({
     const fallbackName = selectedSub + " (" + (form.colors[0] || (selectedCat ? selectedCat.category : "Item")) + ")";
     onAddItem({
       name: form.name || fallbackName,
-      category: selectedCat ? selectedCat.category : "Top",
+      category: selectedCat ? selectedCat.category : "",
       sub_category: selectedSub,
       sub_category_confidence: "high",
       colors: form.colors.length > 0 ? form.colors : ["Black"],
@@ -2327,10 +2410,16 @@ export default function App() {
   };
 
   const addItem = (partial: Partial<ClosetItem>, imageUrl?: string, meta?: AddMeta) => {
+    // Never invent a category: the add flows must supply one from the taxonomy.
+    const category = canonicalCategory(partial.category);
+    if (!category) {
+      addLog("add_item", "MISSING_CATEGORY", "addItem called without a valid category: " + JSON.stringify(partial.category ?? null));
+      return;
+    }
     const item: ClosetItem = {
       id: newItemId(),
       name: partial.name || "Item",
-      category: partial.category || "Top",
+      category: category,
       sub_category: partial.sub_category || "",
       sub_category_confidence: partial.sub_category_confidence || "high",
       colors: partial.colors || ["Black"],
