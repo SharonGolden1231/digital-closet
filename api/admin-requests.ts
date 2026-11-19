@@ -1,7 +1,9 @@
 import { verifyUser, getAdminClient } from "./_lib/gate.js";
 
 // Admin only: the waiting list.
-//   GET                                   -> { requests: [...] } (newest first)
+//   GET                                   -> { requests: [...] } (newest first;
+//                                            approved ones say whether the
+//                                            person joined with their code)
 //   POST {id, action: "approve"}          -> creates a founder invite code -> { code }
 //   POST {id, action: "decline"}
 //   POST {id, action: "delete"}           -> removes the request and its email
@@ -43,7 +45,28 @@ export default async function handler(req: any, res: any) {
         console.error("admin-requests list failed:", error.message);
         return res.status(500).json({ error: "Couldn't load requests." });
       }
-      return res.status(200).json({ requests: data ?? [] });
+      const rows = (data ?? []) as any[];
+      const codes = rows.map((r) => r.invite_code).filter((c): c is string => typeof c === "string" && c.length > 0);
+      const joinedAt = new Map<string, string>();
+      if (codes.length > 0) {
+        const { data: used, error: usedErr } = await admin
+          .from("invite_codes")
+          .select("code, redeemed_at")
+          .in("code", codes);
+        if (usedErr) {
+          // The list still loads; only the "Joined" labels are missing.
+          console.error("admin-requests joined lookup failed:", usedErr.message);
+        }
+        for (const u of (used ?? []) as any[]) {
+          if (u.redeemed_at) joinedAt.set(String(u.code), String(u.redeemed_at));
+        }
+      }
+      return res.status(200).json({
+        requests: rows.map((r) => ({
+          ...r,
+          joined_at: r.invite_code ? joinedAt.get(r.invite_code) ?? null : null,
+        })),
+      });
     }
 
     const body = req.body && typeof req.body === "object" ? req.body : {};
