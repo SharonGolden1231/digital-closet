@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { track } from "../lib/track";
+import { countryOptions } from "../lib/countries";
 
 // Waiting-list form on the (dark) sign-in screen. Also offered when the
 // current wave is full.
@@ -25,6 +26,7 @@ export function RequestAccess({ onBack, waveFull = false }: { onBack: () => void
   const [website, setWebsite] = useState(""); // hidden trap for bots
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const countries = useMemo(() => countryOptions(), []);
   const [error, setError] = useState("");
 
   const submit = async () => {
@@ -129,14 +131,31 @@ export function RequestAccess({ onBack, waveFull = false }: { onBack: () => void
         ))}
       </div>
       {label("Country (optional)")}
-      <input
+      <select
         value={country}
-        onChange={(e) => setCountry(e.target.value.slice(0, 60))}
-        placeholder="e.g. United States"
+        onChange={(e) => setCountry(e.target.value)}
         autoComplete="country-name"
-        className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none"
-        style={field}
-      />
+        className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none appearance-none"
+        style={{ ...field, color: country ? "#F7F4EE" : "rgba(247,244,238,0.5)" }}
+      >
+        <option value="" style={{ color: "#1A3028" }}>
+          Choose your country
+        </option>
+        <optgroup label="Most common">
+          {countries.slice(0, 5).map((c) => (
+            <option key={c.code} value={c.name} style={{ color: "#1A3028" }}>
+              {c.name}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="All countries">
+          {countries.slice(5).map((c) => (
+            <option key={c.code} value={c.name} style={{ color: "#1A3028" }}>
+              {c.name}
+            </option>
+          ))}
+        </optgroup>
+      </select>
       {label("How did you hear about us? (optional)")}
       <input
         value={heard}
