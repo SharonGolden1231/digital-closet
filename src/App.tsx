@@ -50,30 +50,10 @@ import { InviteCard } from "./screens/InviteCard";
 import { RequestAccess } from "./screens/RequestAccess";
 import { AccessRequests } from "./screens/AccessRequests";
 import type { Bucket } from "./lib/taxonomy";
+import { COLOR_HEX } from "./lib/itemStyle";
+import { ItemTile } from "./components/closet/ItemTile";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const COLOR_HEX: Record<string, string> = {
-  Black: "#2B2927",
-  White: "#F7F4EE",
-  Navy: "#1e3a5f",
-  Grey: "#9CA3AF",
-  Charcoal: "#36454F",
-  Beige: "#D4B896",
-  Brown: "#8B6914",
-  Red: "#B91C1C",
-  Pink: "#F4A7B9",
-  Orange: "#EA580C",
-  Yellow: "#CA8A04",
-  Green: "#15803D",
-  Blue: "#2563EB",
-  Purple: "#7C3AED",
-  Cream: "#F5F1EB",
-  Olive: "#6B7C3E",
-  Burgundy: "#800020",
-  Camel: "#C19A6B",
-  Tan: "#D2B48C",
-};
 
 const CATEGORY_ICONS: Record<string, string> = {
   Top: "👕",
@@ -264,16 +244,6 @@ function compressImage(file: File): Promise<{ base64: string; mediaType: string 
 
     img.src = objectUrl;
   });
-}
-
-function getBadgeStyle(badge: string) {
-  if (badge.indexOf("Imported") === 0)
-    return { background: "#F0F0F5", color: "#2D2D5A", border: "1px solid #C0C0D4" };
-  if (badge === "Digitized via Tag")
-    return { background: "#EDF5F0", color: "#1A3028", border: "1px solid #C0D4CC" };
-  if (badge === "Camera Upload" || badge === "Background Cleaned")
-    return { background: "#F5EEF0", color: "#5A2D4A", border: "1px solid #D4B8C4" };
-  return { background: "#F0ECE4", color: "#5A4A3A", border: "1px solid #D4C8B8" };
 }
 
 function buildShopSearchUrl(query: string) {
@@ -1517,50 +1487,7 @@ function ClosetGrid({
   );
   const openGroup = openBucket ? groups.find((g) => g.bucket === openBucket) || null : null;
 
-  const renderCard = (item: ClosetItem) => {
-    const color = item.colors[0] ? COLOR_HEX[item.colors[0]] || "#9CA3AF" : "#9CA3AF";
-    const badgeStyle = getBadgeStyle(item.badge);
-    return (
-      <button
-        key={item.id}
-        onClick={() => setSelected(item)}
-        className="text-left rounded-2xl overflow-hidden transition-all"
-        style={{ background: "white", border: "1px solid var(--warm-grey)" }}
-      >
-        {item.imageUrl ? (
-          <img src={item.imageUrl} alt={item.name} className="w-full object-cover" style={{ height: 140 }} />
-        ) : (
-          <div
-            className="w-full flex items-center justify-center"
-            style={{ height: 140, background: color + "15", fontSize: 48 }}
-          >
-            {emojiFor(item.category, item.sub_category, item.name)}
-          </div>
-        )}
-        <div className="p-3">
-          <p className="text-xs font-medium truncate" style={{ color: "var(--ink)" }}>
-            {item.name}
-          </p>
-          <p className="text-xs mt-0.5" style={{ color: "var(--mid-grey)" }}>
-            {item.brand}
-          </p>
-          <div className="flex flex-wrap gap-1 mt-1.5">
-            {item.colors.map((c) => (
-              <span
-                key={c}
-                className="w-3 h-3 rounded-full border"
-                style={{ background: COLOR_HEX[c] || "#ccc", borderColor: "var(--warm-grey)" }}
-                title={c}
-              />
-            ))}
-          </div>
-          <span className="text-xs px-1.5 py-0.5 rounded-full mt-1.5 inline-block" style={badgeStyle as any}>
-            {item.badge}
-          </span>
-        </div>
-      </button>
-    );
-  };
+  const renderCard = (item: ClosetItem) => <ItemTile key={item.id} item={item} onSelect={setSelected} />;
 
   // A folder: a small collage of its first items, the bucket name and a count.
   const renderFolder = (g: { bucket: Bucket; list: ClosetItem[] }) => {
