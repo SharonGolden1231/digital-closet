@@ -1539,19 +1539,19 @@ function ClosetGrid({
         </span>
       </div>
 
+      {items.length === 0 && (
+        <div className="text-center py-12" style={{ color: "var(--mid-grey)" }}>
+          <Layers size={28} className="mx-auto mb-2 opacity-30" />
+          <p className="text-sm">Your closet is empty so far. Use Add to bring in your first piece.</p>
+        </div>
+      )}
+
       {view === "category" && (
         <ClosetFolders items={items} shopsFor={shopsFor} onSelect={setSelected} />
       )}
 
       {items.length > 0 && view === "all" && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{items.map(renderCard)}</div>
-      )}
-
-      {items.length === 0 && (
-        <div className="text-center py-12" style={{ color: "var(--mid-grey)" }}>
-          <Layers size={28} className="mx-auto mb-2 opacity-30" />
-          <p className="text-sm">Your closet is empty so far. Use Add to bring in your first piece.</p>
-        </div>
       )}
 
       {selected && (
