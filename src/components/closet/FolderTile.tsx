@@ -1,18 +1,15 @@
 import { useEffect, useState } from "react";
 import type { ClosetItem } from "../../types";
 import type { ClosetBucket } from "../../lib/closetBuckets";
-import { pickCoverItem } from "../../lib/folderCover";
 
-// One folder tile in the "By category" view (folder-view brief F2, F3, F7, F8, Q2):
-// a cover photo, the folder name and the item count, e.g. "Jackets · 7".
+// One folder tile in the "By category" view (folder-fixes brief G1, G4; folder-view
+// brief F7, F8): a cover photo, the folder name and the item count, e.g. "Jackets · 7".
 //
-// Cover order:
-// 1. The newest item in the folder with a real photo, shown exactly the way
-//    ItemTile shows it (<img src={item.imageUrl}>, the signed thumbnail).
-// 2. Otherwise the generic category photo bundled with the app:
-//    /folder-covers/<women|men>/<file>.jpg (never loaded from another site).
-// 3. If that file is missing or fails to load: a plain tile with a neutral
-//    background (no image, no emoji).
+// The cover is ALWAYS the generic category photo bundled with the app:
+// /folder-covers/<women|men>/<file>.jpg (never loaded from another site).
+// A user's item photo never becomes a cover, so the folder grid loads no
+// private item images. If the file is missing or fails to load: a plain tile
+// with a neutral background (no image, no emoji).
 
 export type CoverSet = "women" | "men";
 
@@ -22,7 +19,7 @@ export function coverSetFor(shopsFor: string | null | undefined): CoverSet {
   return shopsFor === "menswear" ? "men" : "women";
 }
 
-// Generic cover file per bucket. Needs review has none, so it uses the Q2 fallback.
+// Generic cover file per bucket. Needs review has none yet (Fix 3), so it uses the plain tile.
 const GENERIC_FILE: Partial<Record<ClosetBucket, string>> = {
   Tops: "tops",
   Bottoms: "bottoms",
@@ -54,16 +51,12 @@ export function FolderTile({
   coverSet: CoverSet;
   onOpen: (bucket: ClosetBucket) => void;
 }) {
-  const coverItem = pickCoverItem(items);
-  const itemSrc = coverItem?.imageUrl || null;
-  const genericSrc = genericCoverUrl(bucket, coverSet);
+  const coverSrc = genericCoverUrl(bucket, coverSet);
 
-  // Sources that failed to load. If the item photo fails, try the generic
-  // cover; if that fails too, show the plain tile. Cleared when either source
-  // changes (new item, or the shops_for answer switched the generic set).
-  const [failed, setFailed] = useState<string[]>([]);
-  useEffect(() => setFailed([]), [itemSrc, genericSrc]);
-  const src = [itemSrc, genericSrc].find((s): s is string => !!s && !failed.includes(s)) || null;
+  // Reset when the cover changes (the shops_for answer switched the set).
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [coverSrc]);
+  const src = coverSrc && !failed ? coverSrc : null;
 
   return (
     <button
@@ -77,7 +70,7 @@ export function FolderTile({
           alt={bucket}
           className="w-full object-cover"
           style={{ height: COVER_HEIGHT }}
-          onError={() => setFailed((f) => [...f, src])}
+          onError={() => setFailed(true)}
         />
       ) : (
         <div className="w-full" style={{ height: COVER_HEIGHT, background: "var(--warm-grey)" }} />
