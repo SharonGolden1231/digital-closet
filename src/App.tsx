@@ -82,6 +82,9 @@ const MANUAL_CATEGORIES = [
       "Polo",
       "Hoodie",
       "Sweatshirt",
+      "Sweater",
+      "Cardigan",
+      "Knit Vest",
       "Crop Top",
     ],
   },
@@ -94,6 +97,7 @@ const MANUAL_CATEGORIES = [
       "Shorts",
       "Skirt",
       "Leggings",
+      "Joggers",
     ],
   },
   {

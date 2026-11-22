@@ -23,6 +23,8 @@ export function coverSetFor(shopsFor: string | null | undefined): CoverSet {
 // cover for both sets, /folder-covers/needs-review.jpg (folder-fixes brief G3).
 const GENERIC_FILE: Partial<Record<ClosetBucket, string>> = {
   Tops: "tops",
+  "Knitwear & Cardigans": "knitwear",
+  "Sweatshirts & Joggers": "sweatshirts-joggers",
   Bottoms: "bottoms",
   "Dresses & Jumpsuits": "dresses-jumpsuits",
   Jackets: "jackets",

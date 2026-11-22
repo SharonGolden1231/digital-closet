@@ -1,29 +1,39 @@
-// Groups closet items into the "By category" buckets (trial brief, D1–D7).
-// Pure functions, no React. Matching ignores letter case and extra spaces (D6).
+// Groups closet items into the "By category" buckets (trial brief, D1–D7;
+// taxonomy-v2 brief, H2–H5). Pure functions, no React. Matching ignores letter
+// case and extra spaces (D6). The first three rows are checked first, in order.
 //
-// category     | sub-category                                   | bucket
-// -------------|------------------------------------------------|---------------------
-// (blank)      | any                                            | Needs review
-// not below    | any                                            | Needs review
-// Top          | any                                            | Tops
-// Bottom       | any                                            | Bottoms
-// Dress        | any                                            | Dresses & Jumpsuits
-// Jumpsuit     | any                                            | Dresses & Jumpsuits
-// Outerwear    | contains "coat", "puffer" or "parka"           | Coats   (Trench Coat, Puffer)
-// Outerwear    | else contains "jacket", "blazer" or "bomber"   | Jackets (Bomber, Blazer, Denim/Leather Jacket)
-// Outerwear    | anything else (Gilet, Vest, Cape, blank, ...)  | Needs review
-// Activewear   | any                                            | Activewear
-// Swimwear     | any                                            | Swimwear
-// Sleepwear    | any                                            | Sleepwear
-// Footwear     | any                                            | Footwear
-// Accessory    | any                                            | Accessories
+// category             | sub-category                                      | bucket
+// ---------------------|---------------------------------------------------|---------------------
+// Top or Outerwear     | contains "sweater", "jumper", "cardigan",         | Knitwear & Cardigans
+//                      |   "pullover", "knit vest" or "sweater vest"       |   (Sweater Coat too)
+// Top or Outerwear     | contains "sweatshirt", "hoodie" or "hooded"       | Sweatshirts & Joggers
+// Bottom or Activewear | contains "jogger" or "sweatpant"                  | Sweatshirts & Joggers
+// (blank)              | any                                               | Needs review
+// not below            | any                                               | Needs review
+// Top                  | any other                                         | Tops
+// Bottom               | any other                                         | Bottoms
+// Dress                | any                                               | Dresses & Jumpsuits
+// Jumpsuit             | any                                               | Dresses & Jumpsuits
+// Outerwear            | else contains "coat", "puffer" or "parka"         | Coats   (Trench Coat, Puffer)
+// Outerwear            | else contains "jacket", "blazer" or "bomber"      | Jackets (Bomber, Blazer, Denim/Leather Jacket)
+// Outerwear            | anything else (Gilet, Vest, Cape, blank, ...)     | Needs review
+// Activewear           | any other                                         | Activewear
+// Swimwear             | any                                               | Swimwear
+// Sleepwear            | any                                               | Sleepwear
+// Footwear             | any                                               | Footwear
+// Accessory            | any                                               | Accessories
 //
 // D7 (Sharon, Nov 19 2026): when a sub-category has both a coat word and a
 // jacket word (e.g. "Puffer Jacket"), the coat word wins, so Coats is checked first.
+// Sharon, Nov 22 2026: the knitwear and sweatshirt rules run before the coat and
+// jacket words, so "Sweater Coat" -> Knitwear & Cardigans and "Hooded Puffer" ->
+// Sweatshirts & Joggers.
 
 export const CLOSET_BUCKETS = [
   "Needs review",
   "Tops",
+  "Knitwear & Cardigans",
+  "Sweatshirts & Joggers",
   "Bottoms",
   "Dresses & Jumpsuits",
   "Jackets",
@@ -72,9 +82,20 @@ function outerwearBucket(subCategory: string): ClosetBucket {
   return "Needs review";
 }
 
+const KNIT_WORDS = ["sweater", "jumper", "cardigan", "pullover", "knit vest", "sweater vest"];
+const SWEATSHIRT_WORDS = ["sweatshirt", "hoodie", "hooded"];
+const JOGGER_WORDS = ["jogger", "sweatpant"];
+
+const has = (text: string, words: string[]) => words.some((w) => text.includes(w));
+
 export function bucketFor(item: BucketInput): ClosetBucket {
   const category = normalize(item.category);
-  if (category === "outerwear") return outerwearBucket(normalize(item.sub_category));
+  const sub = normalize(item.sub_category);
+  const topOrOuter = category === "top" || category === "outerwear";
+  if (topOrOuter && has(sub, KNIT_WORDS)) return "Knitwear & Cardigans";
+  if (topOrOuter && has(sub, SWEATSHIRT_WORDS)) return "Sweatshirts & Joggers";
+  if ((category === "bottom" || category === "activewear") && has(sub, JOGGER_WORDS)) return "Sweatshirts & Joggers";
+  if (category === "outerwear") return outerwearBucket(sub);
   return CATEGORY_TO_BUCKET[category] || "Needs review";
 }
 
