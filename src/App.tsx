@@ -52,7 +52,7 @@ import { AccessRequests } from "./screens/AccessRequests";
 import type { Bucket } from "./lib/taxonomy";
 import { COLOR_HEX } from "./lib/itemStyle";
 import { ItemTile } from "./components/closet/ItemTile";
-import { ClosetByCategory } from "./components/closet/ClosetByCategory";
+import { ClosetFolders } from "./components/closet/ClosetFolders";
 import { ClosetViewToggle } from "./components/closet/ClosetViewToggle";
 import type { ClosetView } from "./components/closet/ClosetViewToggle";
 
@@ -1442,12 +1442,14 @@ function ClosetGrid({
   loadPhoto,
   saveState,
   onRemove,
+  shopsFor,
 }: {
   items: ClosetItem[];
   photoUrls: Record<string, string>;
   loadPhoto: (id: string) => void;
   saveState: Record<string, "saving" | "failed">;
   onRemove: (item: ClosetItem) => Promise<boolean>;
+  shopsFor: string | null;
 }) {
   const [selected, setSelected] = useState<ClosetItem | null>(null);
   // Always opens on "By category"; the choice is not remembered (trial P4).
@@ -1537,7 +1539,9 @@ function ClosetGrid({
         </span>
       </div>
 
-      {items.length > 0 && view === "category" && <ClosetByCategory items={items} onSelect={setSelected} />}
+      {items.length > 0 && view === "category" && (
+        <ClosetFolders items={items} shopsFor={shopsFor} onSelect={setSelected} />
+      )}
 
       {items.length > 0 && view === "all" && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{items.map(renderCard)}</div>
@@ -2424,6 +2428,7 @@ export default function App() {
               loadPhoto={loadPhoto}
               saveState={saveState}
               onRemove={removeItem}
+              shopsFor={prof?.profile?.shops_for ?? null}
             />
           </>
         )}
