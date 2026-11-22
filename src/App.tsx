@@ -1539,7 +1539,7 @@ function ClosetGrid({
         </span>
       </div>
 
-      {items.length > 0 && view === "category" && (
+      {view === "category" && (
         <ClosetFolders items={items} shopsFor={shopsFor} onSelect={setSelected} />
       )}
 
