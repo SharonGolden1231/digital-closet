@@ -39,8 +39,8 @@ TAXONOMY:
 Category: Top | Bottom | Outerwear | Dress | Jumpsuit | Footwear | Accessory | Activewear | Swimwear | Sleepwear
 
 Sub-Category:
-- Top → T-Shirt, Tank Top, Button-Down, Blouse, Polo, Hoodie, Sweatshirt, Crop Top
-- Bottom → Jeans, Chinos, Tailored Trousers, Shorts, Skirt, Leggings
+- Top → T-Shirt, Tank Top, Button-Down, Blouse, Polo, Hoodie, Sweatshirt, Sweater, Cardigan, Knit Vest, Crop Top
+- Bottom → Jeans, Chinos, Tailored Trousers, Shorts, Skirt, Leggings, Joggers
 - Outerwear → Bomber, Trench Coat, Puffer, Blazer, Denim Jacket, Leather Jacket
 - Dress → Mini Dress, Midi Dress, Maxi Dress, Wrap Dress, Slip Dress
 - Footwear → Sneakers, Boots, Loafers, Heels, Sandals, Slides
@@ -53,6 +53,8 @@ Pattern: Solid | Striped | Plaid | Check | Floral | Graphic | Abstract | Animal 
 Fit: Slim | Regular | Relaxed | Oversized | Cropped | Tailored | null
 
 RULES:
+- Sweaters, cardigans and knit vests are Category Top (sub-category Sweater, Cardigan or Knit Vest), never Outerwear
+- Joggers and sweatpants are Category Bottom, sub-category Joggers
 - Never guess Category if ambiguous — ask instead
 - Sub-category: infer and flag low confidence
 - Color ambiguous (navy vs black) — ask

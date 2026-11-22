@@ -95,12 +95,16 @@ Using all extracted and decoded data, classify the item:
 Category: Top | Bottom | Outerwear | Dress | Jumpsuit | Footwear | Accessory | Activewear | Swimwear | Sleepwear
 
 Sub-Category:
-- Top → T-Shirt, Tank Top, Button-Down, Blouse, Polo, Hoodie, Sweatshirt, Crop Top
-- Bottom → Jeans, Chinos, Tailored Trousers, Shorts, Skirt, Leggings
+- Top → T-Shirt, Tank Top, Button-Down, Blouse, Polo, Hoodie, Sweatshirt, Sweater, Cardigan, Knit Vest, Crop Top
+- Bottom → Jeans, Chinos, Tailored Trousers, Shorts, Skirt, Leggings, Joggers
 - Outerwear → Bomber, Trench Coat, Puffer, Blazer, Denim Jacket, Leather Jacket
 - Dress → Mini Dress, Midi Dress, Maxi Dress, Wrap Dress, Slip Dress
 - Footwear → Sneakers, Boots, Loafers, Heels, Sandals, Slides
 - Accessory → Belt, Bag, Hat, Scarf, Sunglasses, Watch, Jewelry
+
+Classification rules:
+- Sweaters, cardigans and knit vests are Category Top (sub-category Sweater, Cardigan or Knit Vest), never Outerwear
+- Joggers and sweatpants are Category Bottom, sub-category Joggers
 
 Colors (max 2, use decoded color from reference if available): Black, White, Navy, Grey, Beige, Brown, Red, Pink, Orange, Yellow, Green, Blue, Purple, Cream, Olive, Burgundy, Camel, Tan
 
