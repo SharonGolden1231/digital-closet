@@ -19,7 +19,8 @@ export function coverSetFor(shopsFor: string | null | undefined): CoverSet {
   return shopsFor === "menswear" ? "men" : "women";
 }
 
-// Generic cover file per bucket. Needs review has none yet (Fix 3), so it uses the plain tile.
+// Generic cover file per bucket. Needs review is not listed: it has one shared
+// cover for both sets, /folder-covers/needs-review.jpg (folder-fixes brief G3).
 const GENERIC_FILE: Partial<Record<ClosetBucket, string>> = {
   Tops: "tops",
   Bottoms: "bottoms",
@@ -34,6 +35,7 @@ const GENERIC_FILE: Partial<Record<ClosetBucket, string>> = {
 };
 
 export function genericCoverUrl(bucket: ClosetBucket, set: CoverSet): string | null {
+  if (bucket === "Needs review") return "/folder-covers/needs-review.jpg";
   const file = GENERIC_FILE[bucket];
   return file ? `/folder-covers/${set}/${file}.jpg` : null;
 }

@@ -26,3 +26,11 @@ Date = the date the file was downloaded and saved.
 |men/footwear.jpg|https://unsplash.com/photos/two-unpaired-brown-and-blue-leather-low-top-sneakers-HRYENP2Hfyc|Unsplash License|2026-11-22|
 |men/accessories.jpg|https://unsplash.com/photos/a-pair-of-shoes-a-wallet-and-a-belt-laid-out-on-a-table-cjUxiJoVzc0|Unsplash License|2026-11-19|
 |men/dresses-jumpsuits.jpg|not used: hidden for menswear while empty|||
+|needs-review.jpg|https://unsplash.com/photos/four-paper-card-tags-KaeaUITiWnc|Unsplash License|2026-11-22|
+|men/knitwear.jpg|https://unsplash.com/photos/white-and-brown-knit-textile-Ds4TsdS095U|Unsplash License|2026-11-22|
+|women/knitwear.jpg|https://unsplash.com/photos/white-and-brown-knit-textile-Ds4TsdS095U|Unsplash License|2026-11-22|
+|men/sweatshirts-joggers.jpg|https://unsplash.com/photos/black-and-white-textile-on-white-textile-dqjGsWq2cII|Unsplash License|2026-11-22|
+|women/sweatshirts-joggers.jpg|https://unsplash.com/photos/black-and-white-textile-on-white-textile-dqjGsWq2cII|Unsplash License|2026-11-22|
+
+
+
