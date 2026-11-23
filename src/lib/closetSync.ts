@@ -208,6 +208,31 @@ export async function getPhotoUrl(id: string): Promise<string | null> {
   return typeof body.url === "string" ? body.url : null;
 }
 
+// Changes a saved item's category and type. Returns the values the server
+// stored. Throws with the server's message on failure.
+export async function reclassifyItem(
+  id: string,
+  category: string,
+  subCategory: string
+): Promise<{ category: string; sub_category: string }> {
+  const res = await authFetch("/api/items", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, category, sub_category: subCategory }),
+  });
+  if (!res.ok) {
+    let message = "Couldn't change the type. Please try again.";
+    if (res.status === 404) message = "This item no longer exists. Please refresh the page.";
+    throw new Error(message);
+  }
+  const body = await res.json();
+  const row = body?.item ?? {};
+  return {
+    category: row.category ?? category,
+    sub_category: row.subcategory ?? subCategory,
+  };
+}
+
 // Soft-removes an item (kept for a purge job, hidden from the closet).
 export async function deleteItem(id: string): Promise<void> {
   const res = await authFetch(`/api/items?id=${encodeURIComponent(id)}`, {

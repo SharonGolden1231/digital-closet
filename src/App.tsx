@@ -32,7 +32,7 @@ import type {
 } from "./types";
 import { supabase, authConfigured, OPENED_FROM_RECOVERY_LINK } from "./lib/supabase";
 import { authFetch } from "./lib/authFetch";
-import { saveItem, loadCloset, newItemId, getPhotoUrl, deleteItem } from "./lib/closetSync";
+import { saveItem, loadCloset, newItemId, getPhotoUrl, deleteItem, reclassifyItem } from "./lib/closetSync";
 import type { AddMeta, Outfit } from "./lib/closetSync";
 import { BUCKETS, bucketOf, bucketLabel, emojiFor } from "./lib/taxonomy";
 import { ACCOUNT_DELETING_EVENT } from "./lib/authFetch";
@@ -50,30 +50,15 @@ import { InviteCard } from "./screens/InviteCard";
 import { RequestAccess } from "./screens/RequestAccess";
 import { AccessRequests } from "./screens/AccessRequests";
 import type { Bucket } from "./lib/taxonomy";
+import { COLOR_HEX } from "./lib/itemStyle";
+import { ItemTile } from "./components/closet/ItemTile";
+import { ClosetFolders } from "./components/closet/ClosetFolders";
+import { ClosetViewToggle } from "./components/closet/ClosetViewToggle";
+import type { ClosetView } from "./components/closet/ClosetViewToggle";
+import { ChangeTypeSheet } from "./components/closet/ChangeTypeSheet";
+import { bucketFor } from "./lib/closetBuckets";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const COLOR_HEX: Record<string, string> = {
-  Black: "#2B2927",
-  White: "#F7F4EE",
-  Navy: "#1e3a5f",
-  Grey: "#9CA3AF",
-  Charcoal: "#36454F",
-  Beige: "#D4B896",
-  Brown: "#8B6914",
-  Red: "#B91C1C",
-  Pink: "#F4A7B9",
-  Orange: "#EA580C",
-  Yellow: "#CA8A04",
-  Green: "#15803D",
-  Blue: "#2563EB",
-  Purple: "#7C3AED",
-  Cream: "#F5F1EB",
-  Olive: "#6B7C3E",
-  Burgundy: "#800020",
-  Camel: "#C19A6B",
-  Tan: "#D2B48C",
-};
 
 const CATEGORY_ICONS: Record<string, string> = {
   Top: "👕",
@@ -99,6 +84,9 @@ const MANUAL_CATEGORIES = [
       "Polo",
       "Hoodie",
       "Sweatshirt",
+      "Sweater",
+      "Cardigan",
+      "Knit Vest",
       "Crop Top",
     ],
   },
@@ -111,6 +99,7 @@ const MANUAL_CATEGORIES = [
       "Shorts",
       "Skirt",
       "Leggings",
+      "Joggers",
     ],
   },
   {
@@ -165,6 +154,188 @@ const MANUAL_CATEGORIES = [
     subCategories: ["Pyjama Top", "Pyjama Bottom", "Nightgown", "Robe"],
   },
 ];
+
+// Returns the canonical taxonomy spelling for a category (case-insensitive),
+// or null when it is blank or outside the taxonomy.
+function canonicalCategory(raw: string | null | undefined): string | null {
+  const key = (raw || "").trim().toLowerCase();
+  if (!key) return null;
+  const match = MANUAL_CATEGORIES.find((c) => c.category.toLowerCase() === key);
+  return match ? match.category : null;
+}
+
+// Returns the taxonomy spelling of a type when it belongs to the category,
+// otherwise null (so the user picks one).
+function matchSubCategory(category: string, raw: string | null | undefined): string | null {
+  const key = (raw || "").trim().toLowerCase();
+  const cat = MANUAL_CATEGORIES.find((c) => c.category === category);
+  if (!key || !cat) return null;
+  return cat.subCategories.find((s) => s.toLowerCase() === key) || null;
+}
+
+// Shown when a scan returns no usable category: the user must pick a category
+// and then a type before "Add to Closet" is enabled.
+function CategoryPicker({
+  value,
+  onChange,
+  subValue,
+  onSubChange,
+}: {
+  value: string | null;
+  onChange: (category: string) => void;
+  subValue: string | null;
+  onSubChange: (subCategory: string) => void;
+}) {
+  const subOptions = (MANUAL_CATEGORIES.find((c) => c.category === value) || { subCategories: [] as string[] })
+    .subCategories;
+  return (
+    <div className="space-y-2">
+      <p className="text-xs uppercase tracking-widest font-medium" style={{ color: "var(--mid-grey)" }}>
+        Pick a category to continue
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        {MANUAL_CATEGORIES.map((cat) => {
+          const selected = value === cat.category;
+          return (
+            <button
+              key={cat.category}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => onChange(cat.category)}
+              className="flex items-center gap-3 p-3 rounded-xl text-left transition-all"
+              style={{
+                background: selected ? "var(--success-bg)" : "white",
+                border: "1px solid " + (selected ? "var(--emerald)" : "var(--warm-grey)"),
+              }}
+            >
+              <span className="text-2xl">{CATEGORY_ICONS[cat.category] || "👗"}</span>
+              <span className="text-sm font-medium" style={{ color: "var(--ink)" }}>
+                {cat.category}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {value && subOptions.length > 0 && (
+        <>
+          <p className="text-xs uppercase tracking-widest font-medium pt-2" style={{ color: "var(--mid-grey)" }}>
+            Pick a type
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {subOptions.map((sub) => {
+              const selected = subValue === sub;
+              return (
+                <button
+                  key={sub}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => onSubChange(sub)}
+                  className="px-3 py-2 rounded-full text-xs font-medium transition-all"
+                  style={{
+                    background: selected ? "var(--success-bg)" : "white",
+                    border: "1px solid " + (selected ? "var(--emerald)" : "var(--warm-grey)"),
+                    color: "var(--ink)",
+                  }}
+                >
+                  {sub}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Category and type on a scan's confirm screen. The AI's answer is used until
+// the user changes it; a missing AI category forces a pick (category + type).
+function useCategoryChoice(aiCategoryRaw: string | null | undefined, aiSubRaw: string | null | undefined) {
+  const [pickedCategory, setPickedCategory] = useState<string | null>(null);
+  const [pickedSub, setPickedSub] = useState<string | null>(null);
+  const [changing, setChanging] = useState(false);
+  const aiCategory = canonicalCategory(aiCategoryRaw);
+  const aiSub = (aiSubRaw || "").trim();
+  const overridden = pickedCategory !== null;
+  const category = overridden ? pickedCategory : aiCategory;
+  const subCategory = overridden ? pickedSub || "" : aiSub;
+  // What the picker shows as selected: the user's pick, else the AI's answer.
+  const shownCategory = category;
+  const shownSub = overridden ? pickedSub : aiCategory ? matchSubCategory(aiCategory, aiSub) : null;
+  return {
+    aiCategory,
+    aiSub,
+    category,
+    subCategory,
+    overridden,
+    pickerOpen: !aiCategory || changing,
+    ready: !!category && (!overridden || !!pickedSub),
+    // Only a change against a category the AI did return counts as a change.
+    changedFromAi: !!aiCategory && overridden && (pickedCategory !== aiCategory || (pickedSub || "") !== aiSub),
+    shownCategory,
+    shownSub,
+    openPicker: () => setChanging(true),
+    pickCategory: (cat: string) => {
+      setPickedCategory(cat);
+      setPickedSub(matchSubCategory(cat, aiSub));
+    },
+    pickSub: (sub: string) => {
+      setPickedCategory(shownCategory);
+      setPickedSub(sub);
+    },
+    reset: () => {
+      setPickedCategory(null);
+      setPickedSub(null);
+      setChanging(false);
+    },
+  };
+}
+
+type CategoryChoice = ReturnType<typeof useCategoryChoice>;
+
+// Name for an item whose type the user changed before saving, so the AI's
+// old garment word ("Trousers") is not kept: "Zara Camel Trench Coat".
+function nameFromType(brand: string | null | undefined, colors: string[] | null | undefined, type: string): string {
+  const b = (brand || "").split(" (")[0].trim();
+  const parts = [b && b.toLowerCase() !== "unknown" ? b : "", colors && colors[0] ? colors[0] : "", type];
+  return parts.filter(Boolean).join(" ");
+}
+
+// Confirm-screen control: a "Change" link (or the open picker), plus the
+// low-confidence note for Tag Scan categories not printed on the label.
+function ConfirmCategory({ choice, lowConfidence }: { choice: CategoryChoice; lowConfidence: boolean }) {
+  return (
+    <div className="space-y-2">
+      {(lowConfidence || !choice.pickerOpen) && (
+        <div className="flex items-center gap-3">
+          {lowConfidence && (
+            <p className="text-xs" style={{ color: "#92400E" }}>
+              Low confidence: please confirm the category
+            </p>
+          )}
+          {!choice.pickerOpen && (
+            <button
+              type="button"
+              onClick={choice.openPicker}
+              className="ml-auto text-xs font-medium underline"
+              style={{ color: "var(--emerald)" }}
+            >
+              Change category
+            </button>
+          )}
+        </div>
+      )}
+      {choice.pickerOpen && (
+        <CategoryPicker
+          value={choice.shownCategory}
+          onChange={choice.pickCategory}
+          subValue={choice.shownSub}
+          onSubChange={choice.pickSub}
+        />
+      )}
+    </div>
+  );
+}
 
 const COLORS_LIST = [
   "Black", "White", "Navy", "Grey", "Beige", "Brown", "Red", "Pink",
@@ -264,16 +435,6 @@ function compressImage(file: File): Promise<{ base64: string; mediaType: string 
 
     img.src = objectUrl;
   });
-}
-
-function getBadgeStyle(badge: string) {
-  if (badge.indexOf("Imported") === 0)
-    return { background: "#F0F0F5", color: "#2D2D5A", border: "1px solid #C0C0D4" };
-  if (badge === "Digitized via Tag")
-    return { background: "#EDF5F0", color: "#1A3028", border: "1px solid #C0D4CC" };
-  if (badge === "Camera Upload" || badge === "Background Cleaned")
-    return { background: "#F5EEF0", color: "#5A2D4A", border: "1px solid #D4B8C4" };
-  return { background: "#F0ECE4", color: "#5A4A3A", border: "1px solid #D4C8B8" };
 }
 
 function buildShopSearchUrl(query: string) {
@@ -458,6 +619,8 @@ function ChannelA({
   const [result, setResult] = useState<ClassifyResponse | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const choice = useCategoryChoice(result ? result.category : null, result ? result.sub_category : null);
+  const { category, subCategory, ready } = choice;
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -470,6 +633,7 @@ function ChannelA({
       const objectUrl = URL.createObjectURL(file);
       setPreview(objectUrl);
       setPhotoFile(file);
+      choice.reset();
       setPhase("loading");
       setMessage("Evaluating image quality…");
 
@@ -525,14 +689,25 @@ function ChannelA({
   );
 
   const confirmAdd = () => {
-    if (!result) return;
+    if (!result || !ready) return;
+    if (choice.changedFromAi) {
+      track("category_changed_before_save", {
+        channel: "camera",
+        from_category: choice.aiCategory,
+        from_type: choice.aiSub.slice(0, 60),
+        to_category: category,
+        to_type: subCategory,
+      });
+    }
     const colorLabel = result.colors && result.colors[0] ? result.colors[0] : "";
     onAddItem(
       {
-        name: result.name || result.sub_category + " (" + colorLabel + ")",
-        category: result.category,
-        sub_category: result.sub_category,
-        sub_category_confidence: result.sub_category_confidence,
+        name: choice.changedFromAi
+          ? nameFromType(result.brand, result.colors, subCategory)
+          : result.name || subCategory + " (" + colorLabel + ")",
+        category: category,
+        sub_category: subCategory,
+        sub_category_confidence: choice.overridden ? "high" : result.sub_category_confidence,
         colors: result.colors,
         pattern: result.pattern,
         fit: result.fit,
@@ -549,6 +724,7 @@ function ChannelA({
       setPhase("idle");
       setPreview(null);
       setResult(null);
+      choice.reset();
       setMessage("");
     }, 2000);
   };
@@ -557,6 +733,7 @@ function ChannelA({
     setPhase("idle");
     setPreview(null);
     setResult(null);
+    choice.reset();
     setMessage("");
   };
 
@@ -692,8 +869,8 @@ function ChannelA({
             </div>
             <div className="grid grid-cols-2 gap-y-2 gap-x-4">
               {[
-                ["Name", result.name],
-                ["Category", result.category + " → " + result.sub_category],
+                ["Name", choice.changedFromAi ? nameFromType(result.brand, result.colors, subCategory) : result.name],
+                ["Category", (category || "—") + " → " + (subCategory || "—")],
                 ["Colors", result.colors ? result.colors.join(", ") : ""],
                 ["Pattern", result.pattern],
                 ["Fit", result.fit || "—"],
@@ -716,10 +893,17 @@ function ChannelA({
               </p>
             )}
           </div>
+          <ConfirmCategory choice={choice} lowConfidence={false} />
           <button
             onClick={confirmAdd}
+            disabled={!ready}
             className="w-full py-3 rounded-xl text-sm font-medium"
-            style={{ background: "var(--emerald)", color: "#F7F4EE" }}
+            style={{
+              background: "var(--emerald)",
+              color: "#F7F4EE",
+              opacity: ready ? 1 : 0.4,
+              cursor: ready ? "pointer" : "not-allowed",
+            }}
           >
             Add to Closet ✓
           </button>
@@ -740,9 +924,22 @@ function ChannelA({
 
 // ─── Channel B: Tag Scanner ───────────────────────────────────────────────────
 
+// True when the scan read at least one detail that only a label carries.
+// Brand alone does not count: the model can read it off a logo on the garment.
+function hasTagDetails(result: TagScanResponse): boolean {
+  const x = result.extracted;
+  if (!x) return false;
+  const filled = (v: string | null | undefined) => {
+    const s = (v || "").trim().toLowerCase();
+    return s !== "" && s !== "n/a" && s !== "unknown" && s !== "null" && s !== "none";
+  };
+  return [x.reference, x.rn_number, x.barcode, x.composition, x.size_raw, x.country].some(filled);
+}
+
 function ChannelB({
   onAddItem,
   onLog,
+  onUseCamera,
 }: {
   onAddItem: (
     item: Partial<ClosetItem>,
@@ -750,17 +947,29 @@ function ChannelB({
     meta?: AddMeta
   ) => void;
   onLog: (method: string, exc: string, detail: string) => void;
+  onUseCamera?: () => void;
 }) {
   const [phase, setPhase] = useState<"idle" | "loading" | "result" | "done">("idle");
   const [preview, setPreview] = useState<string | null>(null);
   const [result, setResult] = useState<TagScanResponse | null>(null);
   const [message, setMessage] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const cls = result && result.classification ? result.classification : null;
+  const choice = useCategoryChoice(cls ? cls.category : null, cls ? cls.sub_category : null);
+  const { category, subCategory, ready } = choice;
+  // The label rarely prints the garment type; anything not read from it is low confidence.
+  const lowConfidence = !!cls && !!choice.aiCategory && !choice.overridden && cls.category_source !== "label";
+  // The server says "not_a_tag" first; the label-details check stays as a safety net.
+  const notATag =
+    !!result &&
+    result.status !== "unreadable" &&
+    ((result.status as string) === "not_a_tag" || !hasTagDetails(result));
 
   const handleFile = useCallback(
     async (file: File) => {
       const objectUrl = URL.createObjectURL(file);
       setPreview(objectUrl);
+      choice.reset();
       setPhase("loading");
       setMessage("Reading tag…");
 
@@ -794,6 +1003,10 @@ function ChannelB({
 
         if (data.status === "unreadable") {
           onLog("tag_scan", "OCR_LOW_CONFIDENCE", data.message);
+        } else if ((data.status as string) === "not_a_tag") {
+          onLog("tag_scan", "NOT_A_TAG", "AI says the photo is not a clothing tag");
+        } else if (!hasTagDetails(data)) {
+          onLog("tag_scan", "NOT_A_TAG", "Scan returned no label details (reference, RN, barcode, composition, size, country)");
         }
       } catch (err: any) {
         setMessage("Scan failed — try better lighting or a closer shot.");
@@ -812,12 +1025,24 @@ function ChannelB({
       onLog("tag_scan", "MISSING_CLASSIFICATION", "confirmAdd called with no classification data");
       return;
     }
+    if (notATag || !ready) return;
+    if (choice.changedFromAi) {
+      track("category_changed_before_save", {
+        channel: "tag",
+        from_category: choice.aiCategory,
+        from_type: choice.aiSub.slice(0, 60),
+        to_category: category,
+        to_type: subCategory,
+      });
+    }
     const c = result.classification;
     onAddItem({
-      name: c.name || c.sub_category + " (Tag Scan)",
-      category: c.category,
-      sub_category: c.sub_category,
-      sub_category_confidence: c.sub_category_confidence,
+      name: choice.changedFromAi
+        ? nameFromType(result.extracted && result.extracted.brand, c.colors, subCategory)
+        : c.name || subCategory + " (Tag Scan)",
+      category: category,
+      sub_category: subCategory,
+      sub_category_confidence: choice.overridden ? "high" : c.sub_category_confidence,
       colors: c.colors,
       pattern: c.pattern,
       fit: c.fit,
@@ -831,6 +1056,7 @@ function ChannelB({
       setPhase("idle");
       setPreview(null);
       setResult(null);
+      choice.reset();
       setMessage("");
     }, 2000);
   };
@@ -839,6 +1065,7 @@ function ChannelB({
     setPhase("idle");
     setPreview(null);
     setResult(null);
+    choice.reset();
     setMessage("");
   };
 
@@ -959,6 +1186,36 @@ function ChannelB({
                 <RotateCcw size={10} /> Try again
               </button>
             </div>
+          ) : notATag ? (
+            <div
+              className="rounded-2xl p-4"
+              style={{ background: "#FFFBEB", border: "1px solid #FDE68A" }}
+            >
+              <p className="text-sm font-medium" style={{ color: "var(--ink)" }}>
+                This doesn't look like a clothing tag.
+              </p>
+              <p className="text-xs mt-1" style={{ color: "var(--mid-grey)" }}>
+                Tag Scan reads the label inside the garment. To add the item from a photo of it, use Camera.
+              </p>
+              <div className="flex items-center gap-4 mt-3">
+                {onUseCamera && (
+                  <button
+                    onClick={onUseCamera}
+                    className="px-4 py-2 rounded-xl text-xs font-medium"
+                    style={{ background: "var(--emerald)", color: "#F7F4EE" }}
+                  >
+                    Use Camera instead
+                  </button>
+                )}
+                <button
+                  onClick={reset}
+                  className="flex items-center gap-1 text-xs"
+                  style={{ color: "var(--mid-grey)" }}
+                >
+                  <RotateCcw size={10} /> Scan a tag
+                </button>
+              </div>
+            </div>
           ) : (
             <>
               <div
@@ -1021,7 +1278,7 @@ function ChannelB({
                       Classification
                     </p>
                     {[
-                      ["Category", result.classification.category + " → " + result.classification.sub_category],
+                      ["Category", (category || "—") + " → " + (subCategory || "—")],
                       ["Colors", result.classification.colors ? result.classification.colors.join(", ") : ""],
                       ["Pattern", result.classification.pattern],
                       ["Fit", result.classification.fit || "—"],
@@ -1054,10 +1311,18 @@ function ChannelB({
                 )}
               </div>
 
+              {result.classification && <ConfirmCategory choice={choice} lowConfidence={lowConfidence} />}
+
               <button
                 onClick={confirmAdd}
+                disabled={!!result.classification && !ready}
                 className="w-full py-3 rounded-xl text-sm font-medium"
-                style={{ background: "var(--emerald)", color: "#F7F4EE" }}
+                style={{
+                  background: "var(--emerald)",
+                  color: "#F7F4EE",
+                  opacity: !result.classification || ready ? 1 : 0.4,
+                  cursor: !result.classification || ready ? "pointer" : "not-allowed",
+                }}
               >
                 Add to Closet ✓
               </button>
@@ -1264,7 +1529,7 @@ function ChannelD({
     const fallbackName = selectedSub + " (" + (form.colors[0] || (selectedCat ? selectedCat.category : "Item")) + ")";
     onAddItem({
       name: form.name || fallbackName,
-      category: selectedCat ? selectedCat.category : "Top",
+      category: selectedCat ? selectedCat.category : "",
       sub_category: selectedSub,
       sub_category_confidence: "high",
       colors: form.colors.length > 0 ? form.colors : ["Black"],
@@ -1469,21 +1734,38 @@ function ClosetGrid({
   loadPhoto,
   saveState,
   onRemove,
+  onReclassify,
+  shopsFor,
 }: {
   items: ClosetItem[];
   photoUrls: Record<string, string>;
   loadPhoto: (id: string) => void;
   saveState: Record<string, "saving" | "failed">;
   onRemove: (item: ClosetItem) => Promise<boolean>;
+  onReclassify: (item: ClosetItem, category: string, subCategory: string) => Promise<ClosetItem>;
+  shopsFor: string | null;
 }) {
   const [selected, setSelected] = useState<ClosetItem | null>(null);
-  const [view, setViewState] = useState<"folders" | "all">(() => {
-    try {
-      return localStorage.getItem("vestry.closetView") === "all" ? "all" : "folders";
-    } catch {
-      return "folders";
-    }
-  });
+  const [changingType, setChangingType] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  // The "Moved to <folder>" confirmation disappears after a moment.
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(""), 2500);
+    return () => clearTimeout(t);
+  }, [notice]);
+
+  // Saves a new type, closes the item so its new folder is visible, confirms.
+  const saveType = async (category: string, subCategory: string) => {
+    if (!selected) return;
+    const updated = await onReclassify(selected, category, subCategory);
+    setChangingType(false);
+    setSelected(null);
+    setNotice("Moved to " + bucketFor(updated));
+  };
+  // Always opens on "By category"; the choice is not remembered (trial P4).
+  const [view, setView] = useState<ClosetView>("category");
   const [openBucket, setOpenBucket] = useState<Bucket | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -1491,16 +1773,8 @@ function ClosetGrid({
   // Each newly opened item starts without a pending "remove?" question.
   useEffect(() => {
     setConfirmRemove(false);
+    setChangingType(false);
   }, [selected]);
-
-  const setView = (v: "folders" | "all") => {
-    setViewState(v);
-    try {
-      localStorage.setItem("vestry.closetView", v);
-    } catch {
-      /* the choice just isn't remembered */
-    }
-  };
 
   // Opening an item fetches its full-size photo (the grid only loads thumbnails).
   useEffect(() => {
@@ -1517,50 +1791,7 @@ function ClosetGrid({
   );
   const openGroup = openBucket ? groups.find((g) => g.bucket === openBucket) || null : null;
 
-  const renderCard = (item: ClosetItem) => {
-    const color = item.colors[0] ? COLOR_HEX[item.colors[0]] || "#9CA3AF" : "#9CA3AF";
-    const badgeStyle = getBadgeStyle(item.badge);
-    return (
-      <button
-        key={item.id}
-        onClick={() => setSelected(item)}
-        className="text-left rounded-2xl overflow-hidden transition-all"
-        style={{ background: "white", border: "1px solid var(--warm-grey)" }}
-      >
-        {item.imageUrl ? (
-          <img src={item.imageUrl} alt={item.name} className="w-full object-cover" style={{ height: 140 }} />
-        ) : (
-          <div
-            className="w-full flex items-center justify-center"
-            style={{ height: 140, background: color + "15", fontSize: 48 }}
-          >
-            {emojiFor(item.category, item.sub_category, item.name)}
-          </div>
-        )}
-        <div className="p-3">
-          <p className="text-xs font-medium truncate" style={{ color: "var(--ink)" }}>
-            {item.name}
-          </p>
-          <p className="text-xs mt-0.5" style={{ color: "var(--mid-grey)" }}>
-            {item.brand}
-          </p>
-          <div className="flex flex-wrap gap-1 mt-1.5">
-            {item.colors.map((c) => (
-              <span
-                key={c}
-                className="w-3 h-3 rounded-full border"
-                style={{ background: COLOR_HEX[c] || "#ccc", borderColor: "var(--warm-grey)" }}
-                title={c}
-              />
-            ))}
-          </div>
-          <span className="text-xs px-1.5 py-0.5 rounded-full mt-1.5 inline-block" style={badgeStyle as any}>
-            {item.badge}
-          </span>
-        </div>
-      </button>
-    );
-  };
+  const renderCard = (item: ClosetItem) => <ItemTile key={item.id} item={item} onSelect={setSelected} />;
 
   // A folder: a small collage of its first items, the bucket name and a count.
   const renderFolder = (g: { bucket: Bucket; list: ClosetItem[] }) => {
@@ -1615,59 +1846,25 @@ function ClosetGrid({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <div className="inline-flex rounded-full p-0.5" style={{ background: "var(--faint)" }}>
-          {([["folders", "Folders"], ["all", "All items"]] as const).map((opt) => (
-            <button
-              key={opt[0]}
-              onClick={() => setView(opt[0])}
-              className="text-xs px-3 py-1.5 rounded-full transition-all"
-              style={
-                view === opt[0]
-                  ? { background: "white", color: "var(--emerald)", boxShadow: "0 1px 2px rgba(0,0,0,0.08)" }
-                  : { color: "var(--mid-grey)" }
-              }
-            >
-              {opt[1]}
-            </button>
-          ))}
-        </div>
+        <ClosetViewToggle value={view} onChange={setView} />
         <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
           {items.length} items
         </span>
       </div>
-
-      {items.length > 0 && view === "folders" && !openGroup && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{groups.map(renderFolder)}</div>
-      )}
-
-      {items.length > 0 && view === "folders" && openGroup && (
-        <div className="space-y-3">
-          <button
-            onClick={() => setOpenBucket(null)}
-            className="text-xs flex items-center gap-1"
-            style={{ color: "var(--emerald)" }}
-          >
-            ← All folders
-          </button>
-          <p className="serif text-lg" style={{ color: "var(--emerald)" }}>
-            {bucketLabel(openGroup.bucket)}{" "}
-            <span className="text-xs" style={{ color: "var(--mid-grey)" }}>
-              ({openGroup.list.length})
-            </span>
-          </p>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{openGroup.list.map(renderCard)}</div>
-        </div>
-      )}
-
-      {items.length > 0 && view === "all" && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{items.map(renderCard)}</div>
-      )}
 
       {items.length === 0 && (
         <div className="text-center py-12" style={{ color: "var(--mid-grey)" }}>
           <Layers size={28} className="mx-auto mb-2 opacity-30" />
           <p className="text-sm">Your closet is empty so far. Use Add to bring in your first piece.</p>
         </div>
+      )}
+
+      {view === "category" && (
+        <ClosetFolders items={items} shopsFor={shopsFor} onSelect={setSelected} />
+      )}
+
+      {items.length > 0 && view === "all" && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{items.map(renderCard)}</div>
       )}
 
       {selected && (
@@ -1743,6 +1940,21 @@ function ClosetGrid({
             <p className="text-xs mt-3" style={{ color: "var(--mid-grey)" }}>
               Added {new Date(selected.addedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
             </p>
+            <div className="mt-4">
+              {saveState[selected.id] ? (
+                <p className="text-xs" style={{ color: "var(--mid-grey)" }}>
+                  You can change the type once this item is saved.
+                </p>
+              ) : (
+                <button
+                  onClick={() => setChangingType(true)}
+                  className="w-full text-sm py-2.5 rounded-xl"
+                  style={{ background: "white", border: "1px solid var(--warm-grey)", color: "var(--emerald)" }}
+                >
+                  Change type
+                </button>
+              )}
+            </div>
             <div className="mt-6 pt-4" style={{ borderTop: "1px solid var(--warm-grey)" }}>
               {confirmRemove ? (
                 <div className="space-y-2">
@@ -1791,6 +2003,26 @@ function ClosetGrid({
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {selected && changingType && (
+        <ChangeTypeSheet
+          item={selected}
+          options={MANUAL_CATEGORIES}
+          icons={CATEGORY_ICONS}
+          onSave={saveType}
+          onCancel={() => setChangingType(false)}
+        />
+      )}
+
+      {notice && (
+        <div
+          role="status"
+          className="fixed left-1/2 bottom-6 -translate-x-1/2 px-4 py-2.5 rounded-xl text-sm shadow-lg fade-in"
+          style={{ background: "var(--emerald)", color: "white", zIndex: 70 }}
+        >
+          {notice}
         </div>
       )}
     </div>
@@ -2326,11 +2558,47 @@ export default function App() {
     return true;
   };
 
+  // Changes a saved item's category and type, then updates it in place so it
+  // moves to its new folder without a reload. Throws on failure.
+  const changeItemType = async (
+    item: ClosetItem,
+    category: string,
+    subCategory: string
+  ): Promise<ClosetItem> => {
+    const saved = await reclassifyItem(item.id, category, subCategory);
+    const updated: ClosetItem = {
+      ...item,
+      category: saved.category,
+      sub_category: saved.sub_category,
+      sub_category_confidence: "high",
+    };
+    setItems((prev) =>
+      prev.map((i) =>
+        i.id === item.id
+          ? { ...i, category: saved.category, sub_category: saved.sub_category, sub_category_confidence: "high" }
+          : i
+      )
+    );
+    track("item_reclassified", {
+      from_category: (item.category || "").slice(0, 40),
+      from_type: (item.sub_category || "").slice(0, 60),
+      to_category: saved.category,
+      to_type: saved.sub_category,
+    });
+    return updated;
+  };
+
   const addItem = (partial: Partial<ClosetItem>, imageUrl?: string, meta?: AddMeta) => {
+    // Never invent a category: the add flows must supply one from the taxonomy.
+    const category = canonicalCategory(partial.category);
+    if (!category) {
+      addLog("add_item", "MISSING_CATEGORY", "addItem called without a valid category: " + JSON.stringify(partial.category ?? null));
+      return;
+    }
     const item: ClosetItem = {
       id: newItemId(),
       name: partial.name || "Item",
-      category: partial.category || "Top",
+      category: category,
       sub_category: partial.sub_category || "",
       sub_category_confidence: partial.sub_category_confidence || "high",
       colors: partial.colors || ["Black"],
@@ -2544,6 +2812,8 @@ export default function App() {
               loadPhoto={loadPhoto}
               saveState={saveState}
               onRemove={removeItem}
+              onReclassify={changeItemType}
+              shopsFor={prof?.profile?.shops_for ?? null}
             />
           </>
         )}
@@ -2570,7 +2840,9 @@ export default function App() {
             </div>
             <div className="bg-white rounded-2xl p-4" style={{ border: "1px solid var(--warm-grey)" }}>
               {channel === "A" && <ChannelA onAddItem={addItem} onLog={addLog} />}
-              {channel === "B" && <ChannelB onAddItem={addItem} onLog={addLog} />}
+              {channel === "B" && (
+                <ChannelB onAddItem={addItem} onLog={addLog} onUseCamera={() => setChannel("A")} />
+              )}
               {channel === "C" && <ChannelC onLog={addLog} />}
               {channel === "D" && <ChannelD onAddItem={addItem} />}
             </div>

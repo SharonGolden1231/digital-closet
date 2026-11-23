@@ -6,6 +6,15 @@ const client = new Anthropic({
 
 const TAG_SCAN_SYSTEM_PROMPT = `You are the Tag Intelligence Agent for a premium Digital Closet application. You receive photos of clothing inner labels and care tags, extract all readable data, decode it using brand-specific intelligence, and return a structured item classification.
 
+## STEP 0 — IS THIS A CLOTHING TAG?
+Before anything else, decide whether the image shows a clothing label or care tag: a sewn-in neck or side label, a care-instruction label, or a hang tag / price tag attached to a garment.
+A photo of the garment itself is NOT a tag, even if it shows a printed slogan, a logo, a logo patch, an embroidered brand name, or text on the surface underneath it.
+If it is not a tag, return ONLY:
+{ "status": "not_a_tag", "message": "This doesn't look like a clothing tag." }
+and stop. Do not classify the garment.
+
+Never invent tag data: fill a field only from text you can actually read on the tag. If a value is not printed on the tag, leave it empty. Do not infer size, fabric, country, reference, RN or barcode from how the garment looks.
+
 ## STEP 1 — OCR EXTRACTION
 Read every piece of text visible on the tag. Extract:
 - Brand name
@@ -95,18 +104,24 @@ Using all extracted and decoded data, classify the item:
 Category: Top | Bottom | Outerwear | Dress | Jumpsuit | Footwear | Accessory | Activewear | Swimwear | Sleepwear
 
 Sub-Category:
-- Top → T-Shirt, Tank Top, Button-Down, Blouse, Polo, Hoodie, Sweatshirt, Crop Top
-- Bottom → Jeans, Chinos, Tailored Trousers, Shorts, Skirt, Leggings
+- Top → T-Shirt, Tank Top, Button-Down, Blouse, Polo, Hoodie, Sweatshirt, Sweater, Cardigan, Knit Vest, Crop Top
+- Bottom → Jeans, Chinos, Tailored Trousers, Shorts, Skirt, Leggings, Joggers
 - Outerwear → Bomber, Trench Coat, Puffer, Blazer, Denim Jacket, Leather Jacket
 - Dress → Mini Dress, Midi Dress, Maxi Dress, Wrap Dress, Slip Dress
 - Footwear → Sneakers, Boots, Loafers, Heels, Sandals, Slides
 - Accessory → Belt, Bag, Hat, Scarf, Sunglasses, Watch, Jewelry
+
+Classification rules:
+- Sweaters, cardigans and knit vests are Category Top (sub-category Sweater, Cardigan or Knit Vest), never Outerwear
+- Joggers and sweatpants are Category Bottom, sub-category Joggers
 
 Colors (max 2, use decoded color from reference if available): Black, White, Navy, Grey, Beige, Brown, Red, Pink, Orange, Yellow, Green, Blue, Purple, Cream, Olive, Burgundy, Camel, Tan
 
 Pattern: Solid | Striped | Plaid | Check | Floral | Graphic | Abstract | Animal Print | Camo | Tie-Dye | Houndstooth | Polka Dot | Color Block
 
 Fit: Slim | Regular | Relaxed | Oversized | Cropped | Tailored | null
+
+Category source (required): set "category_source" to "label" ONLY if text printed on the tag names the garment type (for example a hang tag that says "TRENCH COAT" or "JEANS"). In every other case set it to "guess". Never present a guess as decoded.
 
 ## STEP 4 — ONLINE SEARCH RECOMMENDATION
 Based on extracted brand + reference number, provide the most likely search query to find this exact item online:
@@ -118,7 +133,7 @@ Your entire response must be ONLY the JSON object below — nothing before it, n
 
 Return ONLY valid JSON, no markdown:
 {
-  "status": "success" or "partial" or "unreadable",
+  "status": "success" or "partial" or "unreadable" or "not_a_tag",
   "message": "Tag decoded. ✓" or specific issue,
   "extracted": {
     "brand": "",
@@ -141,6 +156,7 @@ Return ONLY valid JSON, no markdown:
     "category": "",
     "sub_category": "",
     "sub_category_confidence": "high or low",
+    "category_source": "label or guess",
     "colors": [],
     "pattern": "",
     "fit": "",
@@ -154,6 +170,7 @@ Return ONLY valid JSON, no markdown:
   "source_signals": ["tag_scan"]
 }
 
+If the image is not a clothing tag: { "status": "not_a_tag", "message": "This doesn't look like a clothing tag." }
 If tag is completely unreadable: { "status": "unreadable", "message": "Can't read this tag — try better lighting or a closer shot." }
 If tag is partially readable: return what you can with "status": "partial" and flag uncertain fields.`;
 
@@ -220,9 +237,18 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const VALID_STATUSES = ["success", "partial", "unreadable"];
+    const VALID_STATUSES = ["success", "partial", "unreadable", "not_a_tag"];
     if (!VALID_STATUSES.includes(parsed.status)) {
       parsed.status = parsed.classification ? "partial" : "unreadable";
+    }
+
+    // Not a tag: return only the status and a fixed message, never a
+    // classification, so the app cannot save a garment from a non-tag photo.
+    if (parsed.status === "not_a_tag") {
+      return res.status(200).json({
+        status: "not_a_tag",
+        message: "This doesn't look like a clothing tag.",
+      });
     }
 
     // Guard against the model omitting classification on partial/success
@@ -237,6 +263,7 @@ export default async function handler(req: any, res: any) {
         category: "",
         sub_category: "",
         sub_category_confidence: "low",
+        category_source: "guess",
         colors: [],
         pattern: "",
         fit: "",
@@ -244,6 +271,12 @@ export default async function handler(req: any, res: any) {
       };
       parsed.status = "partial";
       parsed.message = "Tag partially read — please review and complete the details.";
+    }
+
+    // Anything not explicitly read from the label counts as a guess, so the
+    // app always lets the user confirm or change the category.
+    if (parsed.classification && parsed.classification.category_source !== "label") {
+      parsed.classification.category_source = "guess";
     }
 
     if (!parsed.message || typeof parsed.message !== "string" || !parsed.message.trim()) {
