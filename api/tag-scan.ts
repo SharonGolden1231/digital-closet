@@ -76,7 +76,7 @@ Inditex 13-digit Barcode Decoder:
   * 10 = XL
   * 12 = XXL
 
-Chinese sizing used by Zara/Mango: CH 155/80A=XS, CH 160/84A=S, CH 165/84A=M, CH 170/88A=L
+SIZE RULE: if the tag prints a letter size (XXS, XS, S, M, L, XL, XXL) or a European number size, that printed size IS the size: use it for size_decoded and size_international, even if a barcode or another code suggests something else. Never convert a Chinese height/bust code (e.g. 165/84A) into a letter size; keep such codes in size_raw only. If no size is printed, leave size_decoded empty.
 
 ### H&M GROUP:
 Art. No. format: XXXXXXXX
@@ -191,6 +191,7 @@ export default async function handler(req: any, res: any) {
     const response = await client.messages.create({
       model: "claude-opus-4-5",
       max_tokens: 2048,
+      temperature: 0,
       system: TAG_SCAN_SYSTEM_PROMPT,
       messages: [
         {

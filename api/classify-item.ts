@@ -78,6 +78,7 @@ export default async function handler(req: any, res: any) {
     const response = await client.messages.create({
       model: "claude-opus-4-5",
       max_tokens: 1024,
+      temperature: 0,
       system: CLASSIFY_SYSTEM_PROMPT,
       messages: [
         {
