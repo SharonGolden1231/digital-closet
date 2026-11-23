@@ -62,6 +62,8 @@ export interface TagScanResponse {
     category: string;
     sub_category: string;
     sub_category_confidence: "high" | "low";
+    // "label" only when the tag's printed text names the garment type.
+    category_source?: "label" | "guess";
     colors: string[];
     pattern: string;
     fit: string;

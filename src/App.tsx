@@ -248,6 +248,87 @@ function CategoryPicker({
   );
 }
 
+// Category and type on a scan's confirm screen. The AI's answer is used until
+// the user changes it; a missing AI category forces a pick (category + type).
+function useCategoryChoice(aiCategoryRaw: string | null | undefined, aiSubRaw: string | null | undefined) {
+  const [pickedCategory, setPickedCategory] = useState<string | null>(null);
+  const [pickedSub, setPickedSub] = useState<string | null>(null);
+  const [changing, setChanging] = useState(false);
+  const aiCategory = canonicalCategory(aiCategoryRaw);
+  const aiSub = (aiSubRaw || "").trim();
+  const overridden = pickedCategory !== null;
+  const category = overridden ? pickedCategory : aiCategory;
+  const subCategory = overridden ? pickedSub || "" : aiSub;
+  // What the picker shows as selected: the user's pick, else the AI's answer.
+  const shownCategory = category;
+  const shownSub = overridden ? pickedSub : aiCategory ? matchSubCategory(aiCategory, aiSub) : null;
+  return {
+    aiCategory,
+    aiSub,
+    category,
+    subCategory,
+    overridden,
+    pickerOpen: !aiCategory || changing,
+    ready: !!category && (!overridden || !!pickedSub),
+    // Only a change against a category the AI did return counts as a change.
+    changedFromAi: !!aiCategory && overridden && (pickedCategory !== aiCategory || (pickedSub || "") !== aiSub),
+    shownCategory,
+    shownSub,
+    openPicker: () => setChanging(true),
+    pickCategory: (cat: string) => {
+      setPickedCategory(cat);
+      setPickedSub(matchSubCategory(cat, aiSub));
+    },
+    pickSub: (sub: string) => {
+      setPickedCategory(shownCategory);
+      setPickedSub(sub);
+    },
+    reset: () => {
+      setPickedCategory(null);
+      setPickedSub(null);
+      setChanging(false);
+    },
+  };
+}
+
+type CategoryChoice = ReturnType<typeof useCategoryChoice>;
+
+// Confirm-screen control: a "Change" link (or the open picker), plus the
+// low-confidence note for Tag Scan categories not printed on the label.
+function ConfirmCategory({ choice, lowConfidence }: { choice: CategoryChoice; lowConfidence: boolean }) {
+  return (
+    <div className="space-y-2">
+      {(lowConfidence || !choice.pickerOpen) && (
+        <div className="flex items-center gap-3">
+          {lowConfidence && (
+            <p className="text-xs" style={{ color: "#92400E" }}>
+              Low confidence: please confirm the category
+            </p>
+          )}
+          {!choice.pickerOpen && (
+            <button
+              type="button"
+              onClick={choice.openPicker}
+              className="ml-auto text-xs font-medium underline"
+              style={{ color: "var(--emerald)" }}
+            >
+              Change category
+            </button>
+          )}
+        </div>
+      )}
+      {choice.pickerOpen && (
+        <CategoryPicker
+          value={choice.shownCategory}
+          onChange={choice.pickCategory}
+          subValue={choice.shownSub}
+          onSubChange={choice.pickSub}
+        />
+      )}
+    </div>
+  );
+}
+
 const COLORS_LIST = [
   "Black", "White", "Navy", "Grey", "Beige", "Brown", "Red", "Pink",
   "Orange", "Yellow", "Green", "Blue", "Purple", "Cream", "Olive",
@@ -529,18 +610,9 @@ function ChannelA({
   const [preview, setPreview] = useState<string | null>(null);
   const [result, setResult] = useState<ClassifyResponse | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
-  const [pickedCategory, setPickedCategory] = useState<string | null>(null);
-  const [pickedSub, setPickedSub] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const classifiedCategory = result ? canonicalCategory(result.category) : null;
-  const category = classifiedCategory || pickedCategory;
-  // A picked category also needs a picked type; an AI category keeps the AI type.
-  const subCategory = classifiedCategory ? (result ? result.sub_category : "") : pickedSub || "";
-  const ready = !!category && (!!classifiedCategory || !!pickedSub);
-  const pickCategory = (cat: string) => {
-    setPickedCategory(cat);
-    setPickedSub(matchSubCategory(cat, result ? result.sub_category : ""));
-  };
+  const choice = useCategoryChoice(result ? result.category : null, result ? result.sub_category : null);
+  const { category, subCategory, ready } = choice;
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -553,8 +625,7 @@ function ChannelA({
       const objectUrl = URL.createObjectURL(file);
       setPreview(objectUrl);
       setPhotoFile(file);
-      setPickedCategory(null);
-      setPickedSub(null);
+      choice.reset();
       setPhase("loading");
       setMessage("Evaluating image quality…");
 
@@ -611,13 +682,22 @@ function ChannelA({
 
   const confirmAdd = () => {
     if (!result || !ready) return;
+    if (choice.changedFromAi) {
+      track("category_changed_before_save", {
+        channel: "camera",
+        from_category: choice.aiCategory,
+        from_type: choice.aiSub.slice(0, 60),
+        to_category: category,
+        to_type: subCategory,
+      });
+    }
     const colorLabel = result.colors && result.colors[0] ? result.colors[0] : "";
     onAddItem(
       {
         name: result.name || subCategory + " (" + colorLabel + ")",
         category: category,
         sub_category: subCategory,
-        sub_category_confidence: classifiedCategory ? result.sub_category_confidence : "high",
+        sub_category_confidence: choice.overridden ? "high" : result.sub_category_confidence,
         colors: result.colors,
         pattern: result.pattern,
         fit: result.fit,
@@ -634,8 +714,7 @@ function ChannelA({
       setPhase("idle");
       setPreview(null);
       setResult(null);
-      setPickedCategory(null);
-      setPickedSub(null);
+      choice.reset();
       setMessage("");
     }, 2000);
   };
@@ -644,8 +723,7 @@ function ChannelA({
     setPhase("idle");
     setPreview(null);
     setResult(null);
-    setPickedCategory(null);
-    setPickedSub(null);
+    choice.reset();
     setMessage("");
   };
 
@@ -805,14 +883,7 @@ function ChannelA({
               </p>
             )}
           </div>
-          {!classifiedCategory && (
-            <CategoryPicker
-              value={pickedCategory}
-              onChange={pickCategory}
-              subValue={pickedSub}
-              onSubChange={setPickedSub}
-            />
-          )}
+          <ConfirmCategory choice={choice} lowConfidence={false} />
           <button
             onClick={confirmAdd}
             disabled={!ready}
@@ -872,20 +943,12 @@ function ChannelB({
   const [preview, setPreview] = useState<string | null>(null);
   const [result, setResult] = useState<TagScanResponse | null>(null);
   const [message, setMessage] = useState("");
-  const [pickedCategory, setPickedCategory] = useState<string | null>(null);
-  const [pickedSub, setPickedSub] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const classifiedCategory =
-    result && result.classification ? canonicalCategory(result.classification.category) : null;
-  const category = classifiedCategory || pickedCategory;
-  const aiSub = result && result.classification ? result.classification.sub_category : "";
-  // A picked category also needs a picked type; an AI category keeps the AI type.
-  const subCategory = classifiedCategory ? aiSub : pickedSub || "";
-  const ready = !!category && (!!classifiedCategory || !!pickedSub);
-  const pickCategory = (cat: string) => {
-    setPickedCategory(cat);
-    setPickedSub(matchSubCategory(cat, aiSub));
-  };
+  const cls = result && result.classification ? result.classification : null;
+  const choice = useCategoryChoice(cls ? cls.category : null, cls ? cls.sub_category : null);
+  const { category, subCategory, ready } = choice;
+  // The label rarely prints the garment type; anything not read from it is low confidence.
+  const lowConfidence = !!cls && !!choice.aiCategory && !choice.overridden && cls.category_source !== "label";
   // The server says "not_a_tag" first; the label-details check stays as a safety net.
   const notATag =
     !!result &&
@@ -896,8 +959,7 @@ function ChannelB({
     async (file: File) => {
       const objectUrl = URL.createObjectURL(file);
       setPreview(objectUrl);
-      setPickedCategory(null);
-      setPickedSub(null);
+      choice.reset();
       setPhase("loading");
       setMessage("Reading tag…");
 
@@ -954,12 +1016,21 @@ function ChannelB({
       return;
     }
     if (notATag || !ready) return;
+    if (choice.changedFromAi) {
+      track("category_changed_before_save", {
+        channel: "tag",
+        from_category: choice.aiCategory,
+        from_type: choice.aiSub.slice(0, 60),
+        to_category: category,
+        to_type: subCategory,
+      });
+    }
     const c = result.classification;
     onAddItem({
       name: c.name || subCategory + " (Tag Scan)",
       category: category,
       sub_category: subCategory,
-      sub_category_confidence: classifiedCategory ? c.sub_category_confidence : "high",
+      sub_category_confidence: choice.overridden ? "high" : c.sub_category_confidence,
       colors: c.colors,
       pattern: c.pattern,
       fit: c.fit,
@@ -973,8 +1044,7 @@ function ChannelB({
       setPhase("idle");
       setPreview(null);
       setResult(null);
-      setPickedCategory(null);
-      setPickedSub(null);
+      choice.reset();
       setMessage("");
     }, 2000);
   };
@@ -983,8 +1053,7 @@ function ChannelB({
     setPhase("idle");
     setPreview(null);
     setResult(null);
-    setPickedCategory(null);
-    setPickedSub(null);
+    choice.reset();
     setMessage("");
   };
 
@@ -1230,14 +1299,7 @@ function ChannelB({
                 )}
               </div>
 
-              {result.classification && !classifiedCategory && (
-                <CategoryPicker
-                  value={pickedCategory}
-                  onChange={pickCategory}
-                  subValue={pickedSub}
-                  onSubChange={setPickedSub}
-                />
-              )}
+              {result.classification && <ConfirmCategory choice={choice} lowConfidence={lowConfidence} />}
 
               <button
                 onClick={confirmAdd}

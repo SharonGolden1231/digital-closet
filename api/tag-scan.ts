@@ -121,6 +121,8 @@ Pattern: Solid | Striped | Plaid | Check | Floral | Graphic | Abstract | Animal 
 
 Fit: Slim | Regular | Relaxed | Oversized | Cropped | Tailored | null
 
+Category source (required): set "category_source" to "label" ONLY if text printed on the tag names the garment type (for example a hang tag that says "TRENCH COAT" or "JEANS"). In every other case set it to "guess". Never present a guess as decoded.
+
 ## STEP 4 — ONLINE SEARCH RECOMMENDATION
 Based on extracted brand + reference number, provide the most likely search query to find this exact item online:
 - For Inditex: "site:zara.com [ref number]" or Google Shopping query
@@ -154,6 +156,7 @@ Return ONLY valid JSON, no markdown:
     "category": "",
     "sub_category": "",
     "sub_category_confidence": "high or low",
+    "category_source": "label or guess",
     "colors": [],
     "pattern": "",
     "fit": "",
@@ -260,6 +263,7 @@ export default async function handler(req: any, res: any) {
         category: "",
         sub_category: "",
         sub_category_confidence: "low",
+        category_source: "guess",
         colors: [],
         pattern: "",
         fit: "",
@@ -267,6 +271,12 @@ export default async function handler(req: any, res: any) {
       };
       parsed.status = "partial";
       parsed.message = "Tag partially read — please review and complete the details.";
+    }
+
+    // Anything not explicitly read from the label counts as a guess, so the
+    // app always lets the user confirm or change the category.
+    if (parsed.classification && parsed.classification.category_source !== "label") {
+      parsed.classification.category_source = "guess";
     }
 
     if (!parsed.message || typeof parsed.message !== "string" || !parsed.message.trim()) {

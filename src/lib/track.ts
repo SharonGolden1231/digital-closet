@@ -39,6 +39,7 @@ export type TrackEvent =
   | "consent_decision"
   | "item_saved"
   | "item_reclassified"
+  | "category_changed_before_save"
   | "recommendation_opened"
   | "account_deletion_requested"
   | "account_deletion_cancelled"
