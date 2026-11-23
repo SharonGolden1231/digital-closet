@@ -164,15 +164,30 @@ function canonicalCategory(raw: string | null | undefined): string | null {
   return match ? match.category : null;
 }
 
-// Shown when a scan returns no usable category: the user must pick one
-// before "Add to Closet" is enabled.
+// Returns the taxonomy spelling of a type when it belongs to the category,
+// otherwise null (so the user picks one).
+function matchSubCategory(category: string, raw: string | null | undefined): string | null {
+  const key = (raw || "").trim().toLowerCase();
+  const cat = MANUAL_CATEGORIES.find((c) => c.category === category);
+  if (!key || !cat) return null;
+  return cat.subCategories.find((s) => s.toLowerCase() === key) || null;
+}
+
+// Shown when a scan returns no usable category: the user must pick a category
+// and then a type before "Add to Closet" is enabled.
 function CategoryPicker({
   value,
   onChange,
+  subValue,
+  onSubChange,
 }: {
   value: string | null;
   onChange: (category: string) => void;
+  subValue: string | null;
+  onSubChange: (subCategory: string) => void;
 }) {
+  const subOptions = (MANUAL_CATEGORIES.find((c) => c.category === value) || { subCategories: [] as string[] })
+    .subCategories;
   return (
     <div className="space-y-2">
       <p className="text-xs uppercase tracking-widest font-medium" style={{ color: "var(--mid-grey)" }}>
@@ -201,6 +216,34 @@ function CategoryPicker({
           );
         })}
       </div>
+      {value && subOptions.length > 0 && (
+        <>
+          <p className="text-xs uppercase tracking-widest font-medium pt-2" style={{ color: "var(--mid-grey)" }}>
+            Pick a type
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {subOptions.map((sub) => {
+              const selected = subValue === sub;
+              return (
+                <button
+                  key={sub}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => onSubChange(sub)}
+                  className="px-3 py-2 rounded-full text-xs font-medium transition-all"
+                  style={{
+                    background: selected ? "var(--success-bg)" : "white",
+                    border: "1px solid " + (selected ? "var(--emerald)" : "var(--warm-grey)"),
+                    color: "var(--ink)",
+                  }}
+                >
+                  {sub}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -487,9 +530,17 @@ function ChannelA({
   const [result, setResult] = useState<ClassifyResponse | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [pickedCategory, setPickedCategory] = useState<string | null>(null);
+  const [pickedSub, setPickedSub] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const classifiedCategory = result ? canonicalCategory(result.category) : null;
   const category = classifiedCategory || pickedCategory;
+  // A picked category also needs a picked type; an AI category keeps the AI type.
+  const subCategory = classifiedCategory ? (result ? result.sub_category : "") : pickedSub || "";
+  const ready = !!category && (!!classifiedCategory || !!pickedSub);
+  const pickCategory = (cat: string) => {
+    setPickedCategory(cat);
+    setPickedSub(matchSubCategory(cat, result ? result.sub_category : ""));
+  };
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -503,6 +554,7 @@ function ChannelA({
       setPreview(objectUrl);
       setPhotoFile(file);
       setPickedCategory(null);
+      setPickedSub(null);
       setPhase("loading");
       setMessage("Evaluating image quality…");
 
@@ -558,14 +610,14 @@ function ChannelA({
   );
 
   const confirmAdd = () => {
-    if (!result || !category) return;
+    if (!result || !ready) return;
     const colorLabel = result.colors && result.colors[0] ? result.colors[0] : "";
     onAddItem(
       {
-        name: result.name || result.sub_category + " (" + colorLabel + ")",
+        name: result.name || subCategory + " (" + colorLabel + ")",
         category: category,
-        sub_category: result.sub_category,
-        sub_category_confidence: result.sub_category_confidence,
+        sub_category: subCategory,
+        sub_category_confidence: classifiedCategory ? result.sub_category_confidence : "high",
         colors: result.colors,
         pattern: result.pattern,
         fit: result.fit,
@@ -583,6 +635,7 @@ function ChannelA({
       setPreview(null);
       setResult(null);
       setPickedCategory(null);
+      setPickedSub(null);
       setMessage("");
     }, 2000);
   };
@@ -592,6 +645,7 @@ function ChannelA({
     setPreview(null);
     setResult(null);
     setPickedCategory(null);
+    setPickedSub(null);
     setMessage("");
   };
 
@@ -728,7 +782,7 @@ function ChannelA({
             <div className="grid grid-cols-2 gap-y-2 gap-x-4">
               {[
                 ["Name", result.name],
-                ["Category", (category || "—") + " → " + result.sub_category],
+                ["Category", (category || "—") + " → " + (subCategory || "—")],
                 ["Colors", result.colors ? result.colors.join(", ") : ""],
                 ["Pattern", result.pattern],
                 ["Fit", result.fit || "—"],
@@ -752,17 +806,22 @@ function ChannelA({
             )}
           </div>
           {!classifiedCategory && (
-            <CategoryPicker value={pickedCategory} onChange={setPickedCategory} />
+            <CategoryPicker
+              value={pickedCategory}
+              onChange={pickCategory}
+              subValue={pickedSub}
+              onSubChange={setPickedSub}
+            />
           )}
           <button
             onClick={confirmAdd}
-            disabled={!category}
+            disabled={!ready}
             className="w-full py-3 rounded-xl text-sm font-medium"
             style={{
               background: "var(--emerald)",
               color: "#F7F4EE",
-              opacity: category ? 1 : 0.4,
-              cursor: category ? "pointer" : "not-allowed",
+              opacity: ready ? 1 : 0.4,
+              cursor: ready ? "pointer" : "not-allowed",
             }}
           >
             Add to Closet ✓
@@ -814,10 +873,19 @@ function ChannelB({
   const [result, setResult] = useState<TagScanResponse | null>(null);
   const [message, setMessage] = useState("");
   const [pickedCategory, setPickedCategory] = useState<string | null>(null);
+  const [pickedSub, setPickedSub] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const classifiedCategory =
     result && result.classification ? canonicalCategory(result.classification.category) : null;
   const category = classifiedCategory || pickedCategory;
+  const aiSub = result && result.classification ? result.classification.sub_category : "";
+  // A picked category also needs a picked type; an AI category keeps the AI type.
+  const subCategory = classifiedCategory ? aiSub : pickedSub || "";
+  const ready = !!category && (!!classifiedCategory || !!pickedSub);
+  const pickCategory = (cat: string) => {
+    setPickedCategory(cat);
+    setPickedSub(matchSubCategory(cat, aiSub));
+  };
   // The server says "not_a_tag" first; the label-details check stays as a safety net.
   const notATag =
     !!result &&
@@ -829,6 +897,7 @@ function ChannelB({
       const objectUrl = URL.createObjectURL(file);
       setPreview(objectUrl);
       setPickedCategory(null);
+      setPickedSub(null);
       setPhase("loading");
       setMessage("Reading tag…");
 
@@ -884,13 +953,13 @@ function ChannelB({
       onLog("tag_scan", "MISSING_CLASSIFICATION", "confirmAdd called with no classification data");
       return;
     }
-    if (notATag || !category) return;
+    if (notATag || !ready) return;
     const c = result.classification;
     onAddItem({
-      name: c.name || c.sub_category + " (Tag Scan)",
+      name: c.name || subCategory + " (Tag Scan)",
       category: category,
-      sub_category: c.sub_category,
-      sub_category_confidence: c.sub_category_confidence,
+      sub_category: subCategory,
+      sub_category_confidence: classifiedCategory ? c.sub_category_confidence : "high",
       colors: c.colors,
       pattern: c.pattern,
       fit: c.fit,
@@ -905,6 +974,7 @@ function ChannelB({
       setPreview(null);
       setResult(null);
       setPickedCategory(null);
+      setPickedSub(null);
       setMessage("");
     }, 2000);
   };
@@ -914,6 +984,7 @@ function ChannelB({
     setPreview(null);
     setResult(null);
     setPickedCategory(null);
+    setPickedSub(null);
     setMessage("");
   };
 
@@ -1126,7 +1197,7 @@ function ChannelB({
                       Classification
                     </p>
                     {[
-                      ["Category", (category || "—") + " → " + result.classification.sub_category],
+                      ["Category", (category || "—") + " → " + (subCategory || "—")],
                       ["Colors", result.classification.colors ? result.classification.colors.join(", ") : ""],
                       ["Pattern", result.classification.pattern],
                       ["Fit", result.classification.fit || "—"],
@@ -1160,18 +1231,23 @@ function ChannelB({
               </div>
 
               {result.classification && !classifiedCategory && (
-                <CategoryPicker value={pickedCategory} onChange={setPickedCategory} />
+                <CategoryPicker
+                  value={pickedCategory}
+                  onChange={pickCategory}
+                  subValue={pickedSub}
+                  onSubChange={setPickedSub}
+                />
               )}
 
               <button
                 onClick={confirmAdd}
-                disabled={!!result.classification && !category}
+                disabled={!!result.classification && !ready}
                 className="w-full py-3 rounded-xl text-sm font-medium"
                 style={{
                   background: "var(--emerald)",
                   color: "#F7F4EE",
-                  opacity: !result.classification || category ? 1 : 0.4,
-                  cursor: !result.classification || category ? "pointer" : "not-allowed",
+                  opacity: !result.classification || ready ? 1 : 0.4,
+                  cursor: !result.classification || ready ? "pointer" : "not-allowed",
                 }}
               >
                 Add to Closet ✓
