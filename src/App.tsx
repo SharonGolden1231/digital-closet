@@ -784,9 +784,22 @@ function ChannelA({
 
 // ─── Channel B: Tag Scanner ───────────────────────────────────────────────────
 
+// True when the scan read at least one detail that only a label carries.
+// Brand alone does not count: the model can read it off a logo on the garment.
+function hasTagDetails(result: TagScanResponse): boolean {
+  const x = result.extracted;
+  if (!x) return false;
+  const filled = (v: string | null | undefined) => {
+    const s = (v || "").trim().toLowerCase();
+    return s !== "" && s !== "n/a" && s !== "unknown" && s !== "null" && s !== "none";
+  };
+  return [x.reference, x.rn_number, x.barcode, x.composition, x.size_raw, x.country].some(filled);
+}
+
 function ChannelB({
   onAddItem,
   onLog,
+  onUseCamera,
 }: {
   onAddItem: (
     item: Partial<ClosetItem>,
@@ -794,6 +807,7 @@ function ChannelB({
     meta?: AddMeta
   ) => void;
   onLog: (method: string, exc: string, detail: string) => void;
+  onUseCamera?: () => void;
 }) {
   const [phase, setPhase] = useState<"idle" | "loading" | "result" | "done">("idle");
   const [preview, setPreview] = useState<string | null>(null);
@@ -804,6 +818,7 @@ function ChannelB({
   const classifiedCategory =
     result && result.classification ? canonicalCategory(result.classification.category) : null;
   const category = classifiedCategory || pickedCategory;
+  const notATag = !!result && result.status !== "unreadable" && !hasTagDetails(result);
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -843,6 +858,8 @@ function ChannelB({
 
         if (data.status === "unreadable") {
           onLog("tag_scan", "OCR_LOW_CONFIDENCE", data.message);
+        } else if (!hasTagDetails(data)) {
+          onLog("tag_scan", "NOT_A_TAG", "Scan returned no label details (reference, RN, barcode, composition, size, country)");
         }
       } catch (err: any) {
         setMessage("Scan failed — try better lighting or a closer shot.");
@@ -861,7 +878,7 @@ function ChannelB({
       onLog("tag_scan", "MISSING_CLASSIFICATION", "confirmAdd called with no classification data");
       return;
     }
-    if (!category) return;
+    if (notATag || !category) return;
     const c = result.classification;
     onAddItem({
       name: c.name || c.sub_category + " (Tag Scan)",
@@ -1010,6 +1027,36 @@ function ChannelB({
               >
                 <RotateCcw size={10} /> Try again
               </button>
+            </div>
+          ) : notATag ? (
+            <div
+              className="rounded-2xl p-4"
+              style={{ background: "#FFFBEB", border: "1px solid #FDE68A" }}
+            >
+              <p className="text-sm font-medium" style={{ color: "var(--ink)" }}>
+                This doesn't look like a clothing tag.
+              </p>
+              <p className="text-xs mt-1" style={{ color: "var(--mid-grey)" }}>
+                Tag Scan reads the label inside the garment. To add the item from a photo of it, use Camera.
+              </p>
+              <div className="flex items-center gap-4 mt-3">
+                {onUseCamera && (
+                  <button
+                    onClick={onUseCamera}
+                    className="px-4 py-2 rounded-xl text-xs font-medium"
+                    style={{ background: "var(--emerald)", color: "#F7F4EE" }}
+                  >
+                    Use Camera instead
+                  </button>
+                )}
+                <button
+                  onClick={reset}
+                  className="flex items-center gap-1 text-xs"
+                  style={{ color: "var(--mid-grey)" }}
+                >
+                  <RotateCcw size={10} /> Scan a tag
+                </button>
+              </div>
             </div>
           ) : (
             <>
@@ -2637,7 +2684,9 @@ export default function App() {
             </div>
             <div className="bg-white rounded-2xl p-4" style={{ border: "1px solid var(--warm-grey)" }}>
               {channel === "A" && <ChannelA onAddItem={addItem} onLog={addLog} />}
-              {channel === "B" && <ChannelB onAddItem={addItem} onLog={addLog} />}
+              {channel === "B" && (
+                <ChannelB onAddItem={addItem} onLog={addLog} onUseCamera={() => setChannel("A")} />
+              )}
               {channel === "C" && <ChannelC onLog={addLog} />}
               {channel === "D" && <ChannelD onAddItem={addItem} />}
             </div>
