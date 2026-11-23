@@ -293,6 +293,14 @@ function useCategoryChoice(aiCategoryRaw: string | null | undefined, aiSubRaw: s
 
 type CategoryChoice = ReturnType<typeof useCategoryChoice>;
 
+// Name for an item whose type the user changed before saving, so the AI's
+// old garment word ("Trousers") is not kept: "Zara Camel Trench Coat".
+function nameFromType(brand: string | null | undefined, colors: string[] | null | undefined, type: string): string {
+  const b = (brand || "").split(" (")[0].trim();
+  const parts = [b && b.toLowerCase() !== "unknown" ? b : "", colors && colors[0] ? colors[0] : "", type];
+  return parts.filter(Boolean).join(" ");
+}
+
 // Confirm-screen control: a "Change" link (or the open picker), plus the
 // low-confidence note for Tag Scan categories not printed on the label.
 function ConfirmCategory({ choice, lowConfidence }: { choice: CategoryChoice; lowConfidence: boolean }) {
@@ -694,7 +702,9 @@ function ChannelA({
     const colorLabel = result.colors && result.colors[0] ? result.colors[0] : "";
     onAddItem(
       {
-        name: result.name || subCategory + " (" + colorLabel + ")",
+        name: choice.changedFromAi
+          ? nameFromType(result.brand, result.colors, subCategory)
+          : result.name || subCategory + " (" + colorLabel + ")",
         category: category,
         sub_category: subCategory,
         sub_category_confidence: choice.overridden ? "high" : result.sub_category_confidence,
@@ -859,7 +869,7 @@ function ChannelA({
             </div>
             <div className="grid grid-cols-2 gap-y-2 gap-x-4">
               {[
-                ["Name", result.name],
+                ["Name", choice.changedFromAi ? nameFromType(result.brand, result.colors, subCategory) : result.name],
                 ["Category", (category || "—") + " → " + (subCategory || "—")],
                 ["Colors", result.colors ? result.colors.join(", ") : ""],
                 ["Pattern", result.pattern],
@@ -1027,7 +1037,9 @@ function ChannelB({
     }
     const c = result.classification;
     onAddItem({
-      name: c.name || subCategory + " (Tag Scan)",
+      name: choice.changedFromAi
+        ? nameFromType(result.extracted && result.extracted.brand, c.colors, subCategory)
+        : c.name || subCategory + " (Tag Scan)",
       category: category,
       sub_category: subCategory,
       sub_category_confidence: choice.overridden ? "high" : c.sub_category_confidence,
