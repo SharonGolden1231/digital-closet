@@ -45,7 +45,10 @@
       "Bash(git merge *)",
       "Bash(git branch --set-upstream-to*)",
       "PowerShell(git merge *)",
-      "PowerShell(git branch --set-upstream-to*)"
+      "PowerShell(git branch --set-upstream-to*)",
+      "Edit(./api/items.ts)",
+      "Bash(git rm *)",
+      "PowerShell(git rm *)"
     ],
     "deny": [
       "Bash(git push *)",
@@ -86,11 +89,21 @@
       "Edit(**/.env)",
       "Edit(**/.env.*)",
       "Edit(./supabase/**)",
-      "Edit(./api/**)",
       "Edit(./package.json)",
       "Edit(./package-lock.json)",
       "Edit(./vercel.json)",
-      "Edit(./.claude/**)"
+      "Edit(./.claude/**)",
+      "Edit(./api/account.ts)",
+      "Edit(./api/admin-cap.ts)",
+      "Edit(./api/admin-requests.ts)",
+      "Edit(./api/chat.ts)",
+      "Edit(./api/classify-item.ts)",
+      "Edit(./api/profile.ts)",
+      "Edit(./api/purge.ts)",
+      "Edit(./api/redeem-invite.ts)",
+      "Edit(./api/request-access.ts)",
+      "Edit(./api/tag-scan.ts)",
+      "Edit(./api/_lib/**)"
     ]
   }
 }
