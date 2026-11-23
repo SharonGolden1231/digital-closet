@@ -115,7 +115,7 @@ function parseItem(body: any, userId: string): ParsedItem | { error: string } {
 }
 
 export default async function handler(req: any, res: any) {
-  if (!["GET", "POST", "DELETE"].includes(req.method)) {
+  if (!["GET", "POST", "PATCH", "DELETE"].includes(req.method)) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
@@ -258,6 +258,87 @@ export default async function handler(req: any, res: any) {
         }
       }
       return res.status(200).json({ ok: true, id: parsed.row.id });
+    }
+
+    // ------------------------------------------- change an item's type
+    // Only category and type change. The AI's original answer
+    // (raw_model_output) is never touched, so wrong guesses stay measurable.
+    if (req.method === "PATCH") {
+      const body = req.body;
+      if (!body || typeof body !== "object") {
+        return res.status(400).json({ error: "Invalid request." });
+      }
+      const itemId = String(body.id ?? "");
+      if (!UUID_RE.test(itemId)) {
+        return res.status(400).json({ error: "Invalid item id." });
+      }
+      const category = typeof body.category === "string" ? body.category : "";
+      if (!Object.prototype.hasOwnProperty.call(CATEGORY_EMOJI, category)) {
+        return res.status(400).json({ error: "Invalid category." });
+      }
+      const subRaw =
+        typeof body.sub_category === "string" ? body.sub_category.trim() : "";
+      if (subRaw.length === 0 || subRaw.length > 60) {
+        return res.status(400).json({ error: "Invalid type." });
+      }
+
+      // Row-level security hides other users' items, so a missing row and
+      // someone else's row look the same: 404 either way.
+      const { data: current, error: readError } = await db
+        .from("closet_items")
+        .select("display_image_source")
+        .eq("id", itemId)
+        .is("deleted_at", null)
+        .maybeSingle();
+      if (readError) {
+        console.error("items reclassify read failed:", readError.code, readError.message);
+        return res.status(500).json({ error: "Couldn't change item." });
+      }
+      if (!current) return res.status(404).json({ error: "Item not found." });
+
+      const changes: Record<string, unknown> = {
+        category,
+        subcategory: subRaw,
+        user_confirmed: true,
+      };
+      // An item without a photo shows its category's emoji.
+      if ((current as any).display_image_source === "emoji") {
+        changes.emoji = CATEGORY_EMOJI[category] ?? FALLBACK_EMOJI;
+      }
+
+      const { data: updated, error: updateError } = await db
+        .from("closet_items")
+        .update(changes)
+        .eq("id", itemId)
+        .is("deleted_at", null)
+        .select(LIST_COLUMNS);
+      if (updateError) {
+        console.error("items reclassify failed:", updateError.code, updateError.message);
+        return res.status(500).json({ error: "Couldn't change item." });
+      }
+      const row = (updated as any[] | null)?.[0];
+      // Zero rows: removed in the meantime, or not this user's.
+      if (!row) return res.status(404).json({ error: "Item not found." });
+
+      // Same shape as one entry of the closet list (GET).
+      const { data: imgs } = await db
+        .from("item_images")
+        .select("storage_path, image_type")
+        .eq("item_id", itemId)
+        .in("image_type", ["photo", "thumb"]);
+      const photo = (imgs ?? []).find((i: any) => i.image_type === "photo") as any;
+      const thumb = (imgs ?? []).find((i: any) => i.image_type === "thumb") as any;
+      const path: string | undefined = thumb?.storage_path ?? photo?.storage_path;
+      let thumbUrl: string | null = null;
+      if (path) {
+        const { data: signed } = await db.storage
+          .from(BUCKET)
+          .createSignedUrl(path, 21600);
+        thumbUrl = signed?.signedUrl ?? null;
+      }
+      return res
+        .status(200)
+        .json({ item: { ...row, thumbUrl, hasPhoto: Boolean(photo) } });
     }
 
     // --------------------------------------------------------- remove item
