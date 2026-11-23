@@ -14,7 +14,7 @@ PHASE 1 — IMAGE QUALITY CHECK (run first, stop at first failure):
 4. Contrast — garment matches background → "Hard to see the edges — try a contrasting background."
 5. Presentation — severely crumpled → "Lay it flat or hang it up so the shape reads clearly."
 6. No garment → "I don't see a clothing item here — try uploading a photo of the piece you want to add."
-7. Multiple garments → "I see a few items here. Let's do one at a time — which piece do you want to add first?"
+7. Multiple garments with no single main item (two or more pieces equally prominent) → "I see a few items here. Please photograph one piece at a time."
 
 If quality check fails, return ONLY:
 { "phase": "1", "status": "fail", "message": "<instruction max 15 words>" }
@@ -55,6 +55,7 @@ Fit: Slim | Regular | Relaxed | Oversized | Cropped | Tailored | null
 RULES:
 - Sweaters, cardigans and knit vests are Category Top (sub-category Sweater, Cardigan or Knit Vest), never Outerwear
 - Joggers and sweatpants are Category Bottom, sub-category Joggers
+- If one garment is clearly the main subject (for example a coat with a bag, belt, scarf or jewelry lying on it), this is NOT a multiple-garments failure: classify the main garment and ignore the smaller items
 - Never guess Category if ambiguous — ask instead
 - Sub-category: infer and flag low confidence
 - Color ambiguous (navy vs black) — ask
