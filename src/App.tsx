@@ -818,7 +818,11 @@ function ChannelB({
   const classifiedCategory =
     result && result.classification ? canonicalCategory(result.classification.category) : null;
   const category = classifiedCategory || pickedCategory;
-  const notATag = !!result && result.status !== "unreadable" && !hasTagDetails(result);
+  // The server says "not_a_tag" first; the label-details check stays as a safety net.
+  const notATag =
+    !!result &&
+    result.status !== "unreadable" &&
+    ((result.status as string) === "not_a_tag" || !hasTagDetails(result));
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -858,6 +862,8 @@ function ChannelB({
 
         if (data.status === "unreadable") {
           onLog("tag_scan", "OCR_LOW_CONFIDENCE", data.message);
+        } else if ((data.status as string) === "not_a_tag") {
+          onLog("tag_scan", "NOT_A_TAG", "AI says the photo is not a clothing tag");
         } else if (!hasTagDetails(data)) {
           onLog("tag_scan", "NOT_A_TAG", "Scan returned no label details (reference, RN, barcode, composition, size, country)");
         }
