@@ -32,7 +32,7 @@ import type {
 } from "./types";
 import { supabase, authConfigured, OPENED_FROM_RECOVERY_LINK } from "./lib/supabase";
 import { authFetch } from "./lib/authFetch";
-import { saveItem, loadCloset, newItemId, getPhotoUrl, deleteItem } from "./lib/closetSync";
+import { saveItem, loadCloset, newItemId, getPhotoUrl, deleteItem, reclassifyItem } from "./lib/closetSync";
 import type { AddMeta, Outfit } from "./lib/closetSync";
 import { BUCKETS, bucketOf, bucketLabel, emojiFor } from "./lib/taxonomy";
 import { ACCOUNT_DELETING_EVENT } from "./lib/authFetch";
@@ -55,6 +55,8 @@ import { ItemTile } from "./components/closet/ItemTile";
 import { ClosetFolders } from "./components/closet/ClosetFolders";
 import { ClosetViewToggle } from "./components/closet/ClosetViewToggle";
 import type { ClosetView } from "./components/closet/ClosetViewToggle";
+import { ChangeTypeSheet } from "./components/closet/ChangeTypeSheet";
+import { bucketFor } from "./lib/closetBuckets";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1446,6 +1448,7 @@ function ClosetGrid({
   loadPhoto,
   saveState,
   onRemove,
+  onReclassify,
   shopsFor,
 }: {
   items: ClosetItem[];
@@ -1453,9 +1456,28 @@ function ClosetGrid({
   loadPhoto: (id: string) => void;
   saveState: Record<string, "saving" | "failed">;
   onRemove: (item: ClosetItem) => Promise<boolean>;
+  onReclassify: (item: ClosetItem, category: string, subCategory: string) => Promise<ClosetItem>;
   shopsFor: string | null;
 }) {
   const [selected, setSelected] = useState<ClosetItem | null>(null);
+  const [changingType, setChangingType] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  // The "Moved to <folder>" confirmation disappears after a moment.
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(""), 2500);
+    return () => clearTimeout(t);
+  }, [notice]);
+
+  // Saves a new type, closes the item so its new folder is visible, confirms.
+  const saveType = async (category: string, subCategory: string) => {
+    if (!selected) return;
+    const updated = await onReclassify(selected, category, subCategory);
+    setChangingType(false);
+    setSelected(null);
+    setNotice("Moved to " + bucketFor(updated));
+  };
   // Always opens on "By category"; the choice is not remembered (trial P4).
   const [view, setView] = useState<ClosetView>("category");
   const [openBucket, setOpenBucket] = useState<Bucket | null>(null);
@@ -1465,6 +1487,7 @@ function ClosetGrid({
   // Each newly opened item starts without a pending "remove?" question.
   useEffect(() => {
     setConfirmRemove(false);
+    setChangingType(false);
   }, [selected]);
 
   // Opening an item fetches its full-size photo (the grid only loads thumbnails).
@@ -1631,6 +1654,21 @@ function ClosetGrid({
             <p className="text-xs mt-3" style={{ color: "var(--mid-grey)" }}>
               Added {new Date(selected.addedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
             </p>
+            <div className="mt-4">
+              {saveState[selected.id] ? (
+                <p className="text-xs" style={{ color: "var(--mid-grey)" }}>
+                  You can change the type once this item is saved.
+                </p>
+              ) : (
+                <button
+                  onClick={() => setChangingType(true)}
+                  className="w-full text-sm py-2.5 rounded-xl"
+                  style={{ background: "white", border: "1px solid var(--warm-grey)", color: "var(--emerald)" }}
+                >
+                  Change type
+                </button>
+              )}
+            </div>
             <div className="mt-6 pt-4" style={{ borderTop: "1px solid var(--warm-grey)" }}>
               {confirmRemove ? (
                 <div className="space-y-2">
@@ -1679,6 +1717,26 @@ function ClosetGrid({
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {selected && changingType && (
+        <ChangeTypeSheet
+          item={selected}
+          options={MANUAL_CATEGORIES}
+          icons={CATEGORY_ICONS}
+          onSave={saveType}
+          onCancel={() => setChangingType(false)}
+        />
+      )}
+
+      {notice && (
+        <div
+          role="status"
+          className="fixed left-1/2 bottom-6 -translate-x-1/2 px-4 py-2.5 rounded-xl text-sm shadow-lg fade-in"
+          style={{ background: "var(--emerald)", color: "white", zIndex: 70 }}
+        >
+          {notice}
         </div>
       )}
     </div>
@@ -2214,6 +2272,36 @@ export default function App() {
     return true;
   };
 
+  // Changes a saved item's category and type, then updates it in place so it
+  // moves to its new folder without a reload. Throws on failure.
+  const changeItemType = async (
+    item: ClosetItem,
+    category: string,
+    subCategory: string
+  ): Promise<ClosetItem> => {
+    const saved = await reclassifyItem(item.id, category, subCategory);
+    const updated: ClosetItem = {
+      ...item,
+      category: saved.category,
+      sub_category: saved.sub_category,
+      sub_category_confidence: "high",
+    };
+    setItems((prev) =>
+      prev.map((i) =>
+        i.id === item.id
+          ? { ...i, category: saved.category, sub_category: saved.sub_category, sub_category_confidence: "high" }
+          : i
+      )
+    );
+    track("item_reclassified", {
+      from_category: (item.category || "").slice(0, 40),
+      from_type: (item.sub_category || "").slice(0, 60),
+      to_category: saved.category,
+      to_type: saved.sub_category,
+    });
+    return updated;
+  };
+
   const addItem = (partial: Partial<ClosetItem>, imageUrl?: string, meta?: AddMeta) => {
     const item: ClosetItem = {
       id: newItemId(),
@@ -2432,6 +2520,7 @@ export default function App() {
               loadPhoto={loadPhoto}
               saveState={saveState}
               onRemove={removeItem}
+              onReclassify={changeItemType}
               shopsFor={prof?.profile?.shops_for ?? null}
             />
           </>

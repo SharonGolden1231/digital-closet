@@ -38,6 +38,7 @@ export type TrackEvent =
   | "onboarding_done"
   | "consent_decision"
   | "item_saved"
+  | "item_reclassified"
   | "recommendation_opened"
   | "account_deletion_requested"
   | "account_deletion_cancelled"
