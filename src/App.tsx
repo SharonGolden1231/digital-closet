@@ -57,6 +57,30 @@ import { ClosetViewToggle } from "./components/closet/ClosetViewToggle";
 import type { ClosetView } from "./components/closet/ClosetViewToggle";
 import { ChangeTypeSheet } from "./components/closet/ChangeTypeSheet";
 import { bucketFor } from "./lib/closetBuckets";
+import { describeSize } from "./lib/sizeLabel";
+import type { SizeUnits } from "./lib/sizeLabel";
+
+const SIZE_UNITS_KEY = "dc.sizeUnits";
+
+// Per-device choice of cm or inches for tag sizes; falls back to the units the
+// person chose for their measurements, else inches (as onboarding starts).
+function readSizeUnits(fallback: SizeUnits): SizeUnits {
+  try {
+    const v = window.localStorage.getItem(SIZE_UNITS_KEY);
+    if (v === "metric" || v === "imperial") return v;
+  } catch {
+    // Storage blocked: use the fallback.
+  }
+  return fallback;
+}
+
+function saveSizeUnits(units: SizeUnits) {
+  try {
+    window.localStorage.setItem(SIZE_UNITS_KEY, units);
+  } catch {
+    // Storage blocked: the choice lasts for this screen only.
+  }
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -940,6 +964,7 @@ function ChannelB({
   onAddItem,
   onLog,
   onUseCamera,
+  defaultUnits,
 }: {
   onAddItem: (
     item: Partial<ClosetItem>,
@@ -948,7 +973,13 @@ function ChannelB({
   ) => void;
   onLog: (method: string, exc: string, detail: string) => void;
   onUseCamera?: () => void;
+  defaultUnits?: SizeUnits;
 }) {
+  const [units, setUnits] = useState<SizeUnits>(() => readSizeUnits(defaultUnits || "imperial"));
+  const changeUnits = (u: SizeUnits) => {
+    setUnits(u);
+    saveSizeUnits(u);
+  };
   const [phase, setPhase] = useState<"idle" | "loading" | "result" | "done">("idle");
   const [preview, setPreview] = useState<string | null>(null);
   const [result, setResult] = useState<TagScanResponse | null>(null);
@@ -959,6 +990,12 @@ function ChannelB({
   const { category, subCategory, ready } = choice;
   // The label rarely prints the garment type; anything not read from it is low confidence.
   const lowConfidence = !!cls && !!choice.aiCategory && !choice.overridden && cls.category_source !== "label";
+  const sizeInfo = describeSize(
+    result && result.extracted ? result.extracted.size_raw : null,
+    result && result.extracted ? result.extracted.size_decoded : null,
+    category,
+    units
+  );
   // The server says "not_a_tag" first; the label-details check stays as a safety net.
   const notATag =
     !!result &&
@@ -1250,7 +1287,7 @@ function ChannelB({
                       ["Reference", result.extracted.reference],
                       ["Composition", result.extracted.composition],
                       ["Country", result.extracted.country],
-                      ["Size", result.extracted.size_raw + " → " + result.extracted.size_decoded],
+                      ["Size", sizeInfo.main],
                     ]
                       .filter((pair) => pair[1])
                       .map((pair) => (
@@ -1261,6 +1298,36 @@ function ChannelB({
                           </span>
                         </div>
                       ))}
+                    {sizeInfo.fits && (
+                      <div className="flex justify-between items-center gap-3 text-xs">
+                        <span style={{ color: "var(--mid-grey)" }}>Fits</span>
+                        <span className="flex items-center gap-2 text-right">
+                          <span className="font-medium" style={{ color: "var(--ink)" }}>
+                            {sizeInfo.fits}
+                          </span>
+                          <span
+                            className="flex rounded-full overflow-hidden shrink-0"
+                            style={{ border: "1px solid var(--warm-grey)" }}
+                          >
+                            {(["metric", "imperial"] as SizeUnits[]).map((u) => (
+                              <button
+                                key={u}
+                                type="button"
+                                aria-pressed={units === u}
+                                onClick={() => changeUnits(u)}
+                                className="px-2 py-0.5"
+                                style={{
+                                  background: units === u ? "var(--emerald)" : "white",
+                                  color: units === u ? "#F7F4EE" : "var(--mid-grey)",
+                                }}
+                              >
+                                {u === "metric" ? "cm" : "in"}
+                              </button>
+                            ))}
+                          </span>
+                        </span>
+                      </div>
+                    )}
                     {result.decoded && result.decoded.color_from_ref && (
                       <div className="flex justify-between text-xs">
                         <span style={{ color: "var(--mid-grey)" }}>Color (from ref)</span>
@@ -2841,7 +2908,12 @@ export default function App() {
             <div className="bg-white rounded-2xl p-4" style={{ border: "1px solid var(--warm-grey)" }}>
               {channel === "A" && <ChannelA onAddItem={addItem} onLog={addLog} />}
               {channel === "B" && (
-                <ChannelB onAddItem={addItem} onLog={addLog} onUseCamera={() => setChannel("A")} />
+                <ChannelB
+                  onAddItem={addItem}
+                  onLog={addLog}
+                  onUseCamera={() => setChannel("A")}
+                  defaultUnits={prof?.measurements?.units}
+                />
               )}
               {channel === "C" && <ChannelC onLog={addLog} />}
               {channel === "D" && <ChannelD onAddItem={addItem} />}
