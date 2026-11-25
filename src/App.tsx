@@ -990,12 +990,7 @@ function ChannelB({
   const { category, subCategory, ready } = choice;
   // The label rarely prints the garment type; anything not read from it is low confidence.
   const lowConfidence = !!cls && !!choice.aiCategory && !choice.overridden && cls.category_source !== "label";
-  const sizeInfo = describeSize(
-    result && result.extracted ? result.extracted.size_raw : null,
-    result && result.extracted ? result.extracted.size_decoded : null,
-    category,
-    units
-  );
+  const sizeInfo = describeSize(result ? result.extracted : null, category, units);
   // The server says "not_a_tag" first; the label-details check stays as a safety net.
   const notATag =
     !!result &&
@@ -1298,6 +1293,11 @@ function ChannelB({
                           </span>
                         </div>
                       ))}
+                    {sizeInfo.also && (
+                      <p className="text-right" style={{ color: "var(--mid-grey)", fontSize: 11 }}>
+                        Also: {sizeInfo.also}
+                      </p>
+                    )}
                     {sizeInfo.fits && (
                       <div className="flex justify-between items-center gap-3 text-xs">
                         <span style={{ color: "var(--mid-grey)" }}>Fits</span>

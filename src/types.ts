@@ -50,6 +50,13 @@ export interface TagScanResponse {
     composition: string;
     size_raw: string;
     size_decoded: string;
+    // Main size exactly as printed, its system, other printed sizes, the label text it came from.
+    size_printed?: string;
+    size_system?: string;
+    size_equivalents?: { system?: string; value?: string }[];
+    size_evidence?: string;
+    // Body measurements from a body code like 165/84A (the code stays in size_raw).
+    body_fit?: { height_cm?: number; chest_cm?: number; waist_cm?: number };
   };
   decoded: {
     color_from_ref: string;

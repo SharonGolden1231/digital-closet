@@ -23,7 +23,7 @@ Read every piece of text visible on the tag. Extract:
 - Barcode number (13-digit EAN or other format)
 - Country of manufacture
 - Fabric composition (e.g. "100% Cotton", "80% Polyester 20% Elastane")
-- Size (e.g. "M", "38", "CH 165/84A")
+- Size, in whatever format and wherever it is printed (see SIZE RULE)
 - Care instructions if visible
 
 ## STEP 2 — BRAND INTELLIGENCE DECODING
@@ -76,7 +76,11 @@ Inditex 13-digit Barcode Decoder:
   * 10 = XL
   * 12 = XXL
 
-SIZE RULE: if the tag prints a letter size (XXS, XS, S, M, L, XL, XXL) or a European number size, that printed size IS the size: use it for size_decoded and size_international, even if a barcode or another code suggests something else. Never convert a Chinese height/bust code (e.g. 165/84A) into a letter size; keep such codes in size_raw only. If no size is printed, leave size_decoded empty.
+SIZE RULE (applies to every brand, not only the ones listed above; work out each label's structure yourself):
+- Find every size printed anywhere on the label, in any format: letter sizes (XXS to XXXL), numeric sizes with or without a country (EU 38, US 6, UK 10, IT 42, FR 40, MEX 28, JP 9), waist/length (W32 L34, 32/34), children's sizes (age like 4Y, or height like 104 cm), shoe sizes, multi-country size tables, and a size printed as the last part of a reference or style line (for example "3046/352/704/S" means size S).
+- size_printed: the main size exactly as printed (e.g. "S", "38", "W32 L34"). size_system: one of letter, EU, US, UK, IT, FR, MX, JP, waist_length, kids, shoe, other. size_equivalents: every other size printed on the label, as {"system": "", "value": ""}. size_evidence: the exact label text you took size_printed from.
+- Body codes such as Chinese "165/84A" (height/chest or bust) or "165/66A" (height/waist): put the code in size_raw and the numbers in body_fit as {"height_cm": 165, "chest_cm": 84} or {"height_cm": 165, "waist_cm": 66}. Never convert a body code into a letter size.
+- A printed size always wins over any size suggested by a barcode or code table. Set size_decoded to size_printed. If no size is printed anywhere, leave size_printed and size_decoded empty and do not guess.
 
 ### H&M GROUP:
 Art. No. format: XXXXXXXX
@@ -143,7 +147,12 @@ Return ONLY valid JSON, no markdown:
     "country": "",
     "composition": "",
     "size_raw": "",
-    "size_decoded": ""
+    "size_decoded": "",
+    "size_printed": "",
+    "size_system": "",
+    "size_equivalents": [],
+    "size_evidence": "",
+    "body_fit": {}
   },
   "decoded": {
     "color_from_ref": "",
