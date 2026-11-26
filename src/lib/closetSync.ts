@@ -92,6 +92,56 @@ function channelOf(item: ClosetItem): "camera" | "tag" | "manual" {
   return "manual";
 }
 
+const FIT_KEYS = ["fit_height_cm", "fit_chest_cm", "fit_waist_cm", "fit_hip_cm"] as const;
+
+// The size/fit part of a new item's request; nothing when the item has none.
+function sizePayload(item: ClosetItem): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (item.size || (item.size_equivalents && item.size_equivalents.length) || item.body_code_raw) {
+    out.size = {
+      printed: item.size ?? null,
+      system: item.size_system ?? null,
+      equivalents: item.size_equivalents ?? null,
+      evidence: item.size_evidence ?? null,
+      body_code_raw: item.body_code_raw ?? null,
+      source: item.size_source ?? "user",
+    };
+  }
+  if (FIT_KEYS.some((k) => item[k] != null)) {
+    out.fit = {
+      height_cm: item.fit_height_cm ?? null,
+      chest_cm: item.fit_chest_cm ?? null,
+      waist_cm: item.fit_waist_cm ?? null,
+      hip_cm: item.fit_hip_cm ?? null,
+      source: item.fit_source ?? "user",
+    };
+  }
+  return out;
+}
+
+function numOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Size/fit fields of one row from the server (GET or PATCH answer).
+function sizeFieldsOf(r: any): Partial<ClosetItem> {
+  return {
+    size: r.size ?? null,
+    size_system: r.size_system ?? null,
+    size_equivalents: Array.isArray(r.size_equivalents) ? r.size_equivalents : null,
+    size_evidence: r.size_evidence ?? null,
+    size_source: r.size_source ?? null,
+    body_code_raw: r.body_code_raw ?? null,
+    fit_height_cm: numOrNull(r.fit_height_cm),
+    fit_chest_cm: numOrNull(r.fit_chest_cm),
+    fit_waist_cm: numOrNull(r.fit_waist_cm),
+    fit_hip_cm: numOrNull(r.fit_hip_cm),
+    fit_source: r.fit_source ?? null,
+  };
+}
+
 // Saves one confirmed item: photo and thumbnail go to the user's private
 // folder first, then the item row. Throws on failure so the caller can offer
 // a retry. Safe to call again for the same item.
@@ -141,6 +191,7 @@ export async function saveItem(item: ClosetItem, meta: AddMeta): Promise<void> {
       channel: channelOf(item),
       images,
       raw: meta.raw ?? null,
+      ...sizePayload(item),
     }),
   });
   if (!res.ok) {
@@ -193,6 +244,7 @@ export async function loadCloset(): Promise<{ items: ClosetItem[] }> {
       badge: badgeOf(r.ingestion_channel, r.brand),
       imageUrl: r.thumbUrl ?? undefined,
       addedAt: r.created_at,
+      ...sizeFieldsOf(r),
     } as ClosetItem;
   });
   return { items };
@@ -231,6 +283,35 @@ export async function reclassifyItem(
     category: row.category ?? category,
     sub_category: row.subcategory ?? subCategory,
   };
+}
+
+// Saves the person's correction of a saved item's size and fit (in cm).
+// Returns the size/fit fields the server stored. Throws on failure.
+export async function updateItemSize(
+  id: string,
+  size: { printed: string | null; system: string | null },
+  fit: { height_cm: number | null; chest_cm: number | null; waist_cm: number | null; hip_cm: number | null }
+): Promise<Partial<ClosetItem>> {
+  const res = await authFetch("/api/items", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, size, fit }),
+  });
+  if (!res.ok) {
+    let message = "Couldn't save the size. Please try again.";
+    if (res.status === 404) message = "This item no longer exists. Please refresh the page.";
+    else {
+      try {
+        const body = await res.json();
+        if (body?.error) message = body.error;
+      } catch {
+        /* keep the generic message */
+      }
+    }
+    throw new Error(message);
+  }
+  const body = await res.json();
+  return sizeFieldsOf(body?.item ?? {});
 }
 
 // Soft-removes an item (kept for a purge job, hidden from the closet).

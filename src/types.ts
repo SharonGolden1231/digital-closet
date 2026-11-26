@@ -13,6 +13,19 @@ export interface ClosetItem {
   badge: string;
   imageUrl?: string;
   addedAt: string;
+  // Size as printed on the label (or entered by the person) and the body the
+  // garment is made for, in cm. Sources: "label" (tag scan) or "user".
+  size?: string | null;
+  size_system?: string | null;
+  size_equivalents?: { system: string; value: string }[] | null;
+  size_evidence?: string | null;
+  size_source?: "label" | "user" | null;
+  body_code_raw?: string | null;
+  fit_height_cm?: number | null;
+  fit_chest_cm?: number | null;
+  fit_waist_cm?: number | null;
+  fit_hip_cm?: number | null;
+  fit_source?: "label" | "brand_chart" | "user" | null;
 }
 
 export interface AdminLog {
