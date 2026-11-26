@@ -32,7 +32,7 @@ import type {
 } from "./types";
 import { supabase, authConfigured, OPENED_FROM_RECOVERY_LINK } from "./lib/supabase";
 import { authFetch } from "./lib/authFetch";
-import { saveItem, loadCloset, newItemId, getPhotoUrl, deleteItem, reclassifyItem } from "./lib/closetSync";
+import { saveItem, loadCloset, newItemId, getPhotoUrl, deleteItem, reclassifyItem, updateItemSize } from "./lib/closetSync";
 import type { AddMeta, Outfit } from "./lib/closetSync";
 import { BUCKETS, bucketOf, bucketLabel, emojiFor } from "./lib/taxonomy";
 import { ACCOUNT_DELETING_EVENT } from "./lib/authFetch";
@@ -57,7 +57,9 @@ import { ClosetViewToggle } from "./components/closet/ClosetViewToggle";
 import type { ClosetView } from "./components/closet/ClosetViewToggle";
 import { ChangeTypeSheet } from "./components/closet/ChangeTypeSheet";
 import { bucketFor } from "./lib/closetBuckets";
-import { describeSize } from "./lib/sizeLabel";
+import { describeSize, sizeFieldsFromTag } from "./lib/sizeLabel";
+import type { FitCm } from "./lib/sizeLabel";
+import { ItemSizeSection } from "./components/closet/ItemSizeSection";
 import type { SizeUnits } from "./lib/sizeLabel";
 
 const SIZE_UNITS_KEY = "dc.sizeUnits";
@@ -1082,6 +1084,7 @@ function ChannelB({
       material: c.material || (result.extracted && result.extracted.composition) || "",
       source_signals: ["tag_scan"],
       badge: "Digitized via Tag",
+      ...sizeFieldsFromTag(result.extracted, category),
     }, undefined, { raw: result });
     setPhase("done");
     setTimeout(() => {
@@ -1802,7 +1805,9 @@ function ClosetGrid({
   saveState,
   onRemove,
   onReclassify,
+  onSaveSize,
   shopsFor,
+  defaultUnits,
 }: {
   items: ClosetItem[];
   photoUrls: Record<string, string>;
@@ -1810,9 +1815,20 @@ function ClosetGrid({
   saveState: Record<string, "saving" | "failed">;
   onRemove: (item: ClosetItem) => Promise<boolean>;
   onReclassify: (item: ClosetItem, category: string, subCategory: string) => Promise<ClosetItem>;
+  onSaveSize: (
+    item: ClosetItem,
+    size: { printed: string | null; system: string | null },
+    fit: FitCm
+  ) => Promise<ClosetItem>;
   shopsFor: string | null;
+  defaultUnits?: SizeUnits;
 }) {
   const [selected, setSelected] = useState<ClosetItem | null>(null);
+  const [units, setUnits] = useState<SizeUnits>(() => readSizeUnits(defaultUnits || "imperial"));
+  const changeUnits = (u: SizeUnits) => {
+    setUnits(u);
+    saveSizeUnits(u);
+  };
   const [changingType, setChangingType] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -1993,6 +2009,16 @@ function ClosetGrid({
                 </div>
               ))}
             </div>
+            <ItemSizeSection
+              item={selected}
+              units={units}
+              onUnitsChange={changeUnits}
+              canEdit={!saveState[selected.id]}
+              onSave={async (size, fit) => {
+                const updated = await onSaveSize(selected, size, fit);
+                setSelected(updated);
+              }}
+            />
             <div className="mt-3 flex flex-wrap gap-1">
               {selected.source_signals.map((s) => (
                 <span
@@ -2655,6 +2681,18 @@ export default function App() {
     return updated;
   };
 
+  // Saves the person's size correction and updates the item in the closet.
+  const changeItemSize = async (
+    item: ClosetItem,
+    size: { printed: string | null; system: string | null },
+    fit: FitCm
+  ): Promise<ClosetItem> => {
+    const saved = await updateItemSize(item.id, size, fit);
+    const updated: ClosetItem = { ...item, ...saved };
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...saved } : i)));
+    return updated;
+  };
+
   const addItem = (partial: Partial<ClosetItem>, imageUrl?: string, meta?: AddMeta) => {
     // Never invent a category: the add flows must supply one from the taxonomy.
     const category = canonicalCategory(partial.category);
@@ -2677,6 +2715,19 @@ export default function App() {
       badge: partial.badge || "Manually Cataloged",
       imageUrl: imageUrl,
       addedAt: new Date().toISOString(),
+      // Only Tag Scan reads a size today; Camera and Manual items have none
+      // until the person adds one on the item card.
+      size: partial.size ?? null,
+      size_system: partial.size_system ?? null,
+      size_equivalents: partial.size_equivalents ?? null,
+      size_evidence: partial.size_evidence ?? null,
+      size_source: partial.size_source ?? null,
+      body_code_raw: partial.body_code_raw ?? null,
+      fit_height_cm: partial.fit_height_cm ?? null,
+      fit_chest_cm: partial.fit_chest_cm ?? null,
+      fit_waist_cm: partial.fit_waist_cm ?? null,
+      fit_hip_cm: partial.fit_hip_cm ?? null,
+      fit_source: partial.fit_source ?? null,
     };
     setItems((prev) => [item, ...prev]);
     void persist(item, meta || {});
@@ -2880,7 +2931,9 @@ export default function App() {
               saveState={saveState}
               onRemove={removeItem}
               onReclassify={changeItemType}
+              onSaveSize={changeItemSize}
               shopsFor={prof?.profile?.shops_for ?? null}
+              defaultUnits={prof?.measurements?.units}
             />
           </>
         )}
