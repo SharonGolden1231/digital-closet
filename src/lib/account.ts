@@ -55,10 +55,13 @@ export const EMPTY_PROFILE: StyleProfile = {
 export class ApiError extends Error {
   status: number;
   code?: string;
-  constructor(message: string, status: number, code?: string) {
+  // Which field the server refused (e.g. "shoulder_cm"), when it says.
+  field?: string;
+  constructor(message: string, status: number, code?: string, field?: string) {
     super(message);
     this.status = status;
     this.code = code;
+    this.field = field;
   }
 }
 
@@ -71,7 +74,12 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     data = {};
   }
   if (!res.ok) {
-    throw new ApiError(data.error || "Something went wrong — please try again.", res.status, data.code);
+    throw new ApiError(
+      data.error || "Something went wrong — please try again.",
+      res.status,
+      data.code,
+      typeof data.field === "string" ? data.field : undefined
+    );
   }
   return data as T;
 }

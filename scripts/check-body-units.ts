@@ -10,6 +10,8 @@ import {
   heightFromStored, heightFromTypedCm, heightFromTypedFtIn, heightValue,
 } from "../src/lib/bodyUnits.ts";
 import type { BodyKey, BodyField } from "../src/lib/bodyUnits.ts";
+import { MEASURE_KEYS, RANGES as SHARED_RANGES, inRange, rangeText, rangeError, helpText } from "../shared/bodyRanges.ts";
+import type { RangeKey } from "../shared/bodyRanges.ts";
 
 // Stored values as they come from the database (cm/kg, 1 decimal), incl. the DEV case.
 const SAMPLES: Record<BodyKey, number>[] = [
@@ -90,6 +92,57 @@ test("only the field the user typed changes", () => {
   const b = load(s, true);
   b.waist_cm = fieldFromTyped("waist_cm", "24", true); // 60.96
   assert.deepEqual(send(b), { ...s, waist_cm: 61 });
+});
+
+// ---- ranges: one source for form check, server check, error and (i) text ----
+
+test("the form and server field lists are the same", () => {
+  assert.deepEqual([...BODY_KEYS], [...MEASURE_KEYS]);
+  // Range check on the stored value, like api/profile.ts.
+  for (const k of BODY_KEYS) {
+    // The 0.1-step sweep above uses the same ranges as the form and server.
+    assert.deepEqual(RANGES[k], SHARED_RANGES[k], k);
+    const [lo, hi] = SHARED_RANGES[k];
+    assert.ok(inRange(k, lo) && inRange(k, hi) && !inRange(k, lo - 0.1) && !inRange(k, hi + 0.1), k);
+  }
+});
+
+// Read the whole-number ends back out of a range text ("12–27 in", "4′0″–7′6″").
+const ends = (t: string): [number, number] => {
+  const ft = t.match(/(\d+)′(\d+)″–(\d+)′(\d+)″/);
+  if (ft) return [Number(ft[1]) * 12 + Number(ft[2]), Number(ft[3]) * 12 + Number(ft[4])];
+  const m = t.match(/([\d.]+)–([\d.]+)/);
+  return [Number(m![1]), Number(m![2])];
+};
+
+test("every range shown in inches/lb is really accepted, and one step outside is refused", () => {
+  for (const k of BODY_KEYS) {
+    const [lo, hi] = ends(rangeText(k, true));
+    const sent = (typed: number) => storedValue(fieldFromTyped(k, String(typed), true))!;
+    assert.ok(inRange(k, sent(lo)) && inRange(k, sent(hi)), `${k} ${rangeText(k, true)}`);
+    assert.ok(!inRange(k, sent(lo - 1)) && !inRange(k, sent(hi + 1)), `${k} outside`);
+  }
+  const [hlo, hhi] = ends(rangeText("height_cm", true));
+  const h = (inches: number) => heightValue(heightFromTypedFtIn(String(Math.floor(inches / 12)), String(inches % 12)))!;
+  assert.ok(inRange("height_cm", h(hlo)) && inRange("height_cm", h(hhi)), rangeText("height_cm", true));
+  assert.ok(!inRange("height_cm", h(hlo - 1)) && !inRange("height_cm", h(hhi + 1)), "height outside");
+});
+
+test("the (i) text and the error repeat the same range, in the user's units", () => {
+  const keys: RangeKey[] = ["height_cm", ...MEASURE_KEYS];
+  for (const k of keys) {
+    for (const imperial of [true, false]) {
+      const r = rangeText(k, imperial);
+      assert.ok(helpText(k, imperial).includes(`Range: ${r} (`), `${k} help`);
+      assert.ok(rangeError(k, imperial).endsWith(`between ${r}.`), `${k} error`);
+    }
+  }
+  assert.equal(rangeError("shoulder_cm", true), "Shoulder width must be between 12–27 in.");
+  assert.equal(rangeError("shoulder_cm", false), "Shoulder width must be between 30–70 cm.");
+  assert.equal(
+    helpText("shoulder_cm", false),
+    "From one shoulder tip to the other, across your back, not around your body. Range: 30–70 cm (12–27 in)."
+  );
 });
 
 test("height: unchanged stored height is sent as stored, in ft/in and cm", () => {

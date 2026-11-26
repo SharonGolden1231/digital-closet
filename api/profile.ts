@@ -1,5 +1,8 @@
 import { verifyUser } from "./_lib/gate.js";
 import { userClient, COLOR_HEX } from "./_lib/closet.js";
+// Same names and ranges as the Fit screen and its (i) text.
+import { MEASURE_KEYS, RANGES, inRange, rangeError } from "../shared/bodyRanges.js";
+import type { RangeKey } from "../shared/bodyRanges.js";
 
 // The signed-in user's intro answers (style profile), optional body
 // measurements and admin flag.
@@ -38,14 +41,9 @@ const COLUMNS =
   "first_name, adult_confirmed, age_band, shops_for, weekdays, weekends, style_now, style_toward, style_icon, goals, brand_tiers, brands, height_cm, fit_issues, colors_love, colors_avoid, onboarding_completed_at";
 
 const BODY_CONSENT_VERSION = "body-2026-11-v1";
-const BODY_FIELDS: Record<string, [number, number]> = {
-  weight_kg: [30, 300],
-  chest_cm: [50, 200],
-  waist_cm: [40, 200],
-  hips_cm: [50, 220],
-  inseam_cm: [40, 120],
-  shoulder_cm: [30, 70],
-};
+const BODY_FIELDS: Record<string, [number, number]> = Object.fromEntries(
+  MEASURE_KEYS.map((k) => [k, RANGES[k]])
+);
 const BODY_COLUMNS = "weight_kg, chest_cm, waist_cm, hips_cm, inseam_cm, shoulder_cm, units";
 // One dated history entry = a snapshot of the user's current body values.
 // Height comes from style_profiles (the ONE home of the user's height);
@@ -100,14 +98,14 @@ async function recordEntry(db: any, userId: string): Promise<string | null> {
 export function buildMeasurements(m: any): Record<string, unknown> {
   if (!m || typeof m !== "object" || Array.isArray(m)) throw new Invalid("measurements");
   const row: Record<string, unknown> = {};
-  for (const [field, [min, max]] of Object.entries(BODY_FIELDS)) {
+  for (const field of Object.keys(BODY_FIELDS)) {
     const v = m[field];
     if (v === null || v === undefined || v === "") {
       row[field] = null;
       continue;
     }
     const n = Math.round(Number(v) * 10) / 10;
-    if (!Number.isFinite(n) || n < min || n > max) throw new Invalid(field);
+    if (!inRange(field as RangeKey, n)) throw new Invalid(field);
     row[field] = n;
   }
   if (m.units !== "imperial" && m.units !== "metric") throw new Invalid("units");
@@ -178,7 +176,7 @@ export function buildUpdate(answers: any): Record<string, unknown> {
     if (h === null || h === "" || h === undefined) row.height_cm = null;
     else {
       const n = Number(h);
-      if (!Number.isInteger(n) || n < 120 || n > 230) throw new Invalid("height_cm");
+      if (!Number.isInteger(n) || !inRange("height_cm", n)) throw new Invalid("height_cm");
       row.height_cm = n;
     }
   }
@@ -284,7 +282,10 @@ export default async function handler(req: any, res: any) {
         m = buildMeasurements(body.measurements);
       } catch (e) {
         if (e instanceof Invalid) {
-          return res.status(400).json({ error: "Please check your measurements.", field: e.message });
+          // Name the field and its range (the app shows the same text in the user's units).
+          const imperial = body.measurements?.units === "imperial";
+          const error = e.message in RANGES ? rangeError(e.message as RangeKey, imperial) : "Please check your measurements.";
+          return res.status(400).json({ error, field: e.message });
         }
         throw e;
       }
@@ -296,7 +297,8 @@ export default async function handler(req: any, res: any) {
         row = buildUpdate(body.answers);
       } catch (e) {
         if (e instanceof Invalid) {
-          return res.status(400).json({ error: "Please check your answers.", field: e.message });
+          const error = e.message === "height_cm" ? rangeError("height_cm", false) : "Please check your answers.";
+          return res.status(400).json({ error, field: e.message });
         }
         throw e;
       }

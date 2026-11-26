@@ -95,7 +95,8 @@ export function Settings({
 
   const removeMeasurements = async () => {
     if (busy) return;
-    if (!window.confirm("Delete your body measurements? You can add them again later.")) return;
+    // Withdraws the measurements consent: deletes current values AND history.
+    if (!window.confirm("This deletes your measurements and their history. Continue?")) return;
     setBusy(true);
     setError("");
     try {
@@ -176,7 +177,7 @@ export function Settings({
         </Secondary>
         {measurements && (
           <Secondary onClick={removeMeasurements} disabled={busy}>
-            Delete my measurements
+            Remove my measurements
           </Secondary>
         )}
       </Card>
