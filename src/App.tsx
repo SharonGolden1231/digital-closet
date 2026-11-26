@@ -2987,6 +2987,7 @@ export default function App() {
             account={account}
             profile={prof?.profile ?? null}
             measurements={prof?.measurements ?? null}
+            bodyConsent={prof?.bodyConsent === true}
             onMeasurementsDeleted={() => void loadGate()}
             onEditAnswers={(step) => {
               setEditStep(step);

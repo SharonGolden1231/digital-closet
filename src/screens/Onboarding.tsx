@@ -144,8 +144,9 @@ export function Onboarding({
   });
   // Already agreed earlier: the box starts ticked (it can still be unticked).
   const [bodyConsent, setBodyConsent] = useState(initialBodyConsent && Boolean(initialMeasurements));
-  // Measurements are saved on the server (unticking the box then withdraws).
-  const [hasSavedBody, setHasSavedBody] = useState(Boolean(initialMeasurements));
+  // Measurements (or their history) may exist on the server: unticking the box
+  // then withdraws at once, after a confirmation.
+  const [bodyOnServer, setBodyOnServer] = useState(Boolean(initialMeasurements) || initialBodyConsent);
   // The field the last error is about (highlighted), and the open (i) text.
   const [badField, setBadField] = useState<RangeKey | null>(null);
   const [openInfo, setOpenInfo] = useState<RangeKey | null>(null);
@@ -204,6 +205,40 @@ export function Onboarding({
     }
   };
 
+  // The consent box acts at once. Unticking with measurements (or history) on
+  // the server asks first; Yes withdraws immediately (consent withdrawn,
+  // current values and all history deleted) and clears the fields; No keeps
+  // the box ticked and changes nothing.
+  const onConsentChange = async (checked: boolean) => {
+    if (busy) return;
+    setError("");
+    if (checked) {
+      setBodyConsent(true);
+      return;
+    }
+    if (!bodyOnServer) {
+      setBodyConsent(false);
+      return;
+    }
+    if (!window.confirm("This deletes your measurements and their history. Continue?")) return;
+    setBusy(true);
+    try {
+      await deleteMeasurements();
+      setBodyOnServer(false);
+      setBodyConsent(false);
+      setBadField(null);
+      setBody((prev) => {
+        const out = { ...prev };
+        for (const f of BODY_FIELDS) out[f.key] = { text: "", exact: null };
+        return out;
+      });
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Couldn't delete — check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Fit screen: every typed value must be a number in its allowed range
   // (same ranges as the server). Returns the first problem, or null.
   const checkFit = (imperial: boolean): { field: RangeKey; message: string } | null => {
@@ -212,7 +247,7 @@ export function Onboarding({
     if ((hTyped && h === null) || (h !== null && !inRange("height_cm", h))) {
       return { field: "height_cm", message: rangeError("height_cm", imperial) };
     }
-    if (!showBody) return null;
+    if (!showBody || !bodyConsent) return null;
     for (const f of BODY_FIELDS) {
       const v = storedValue(body[f.key]);
       const typed = body[f.key].text.trim() !== "";
@@ -247,34 +282,17 @@ export function Onboarding({
       }
     }
     const bodyTyped = showBody && BODY_FIELDS.some((f) => body[f.key].text.trim() !== "");
-    // Saved measurements + box unticked (or all fields cleared) = withdraw the
-    // consent: that deletes the measurements and their history. Never
-    // re-record consent while the box is unticked.
-    const withdraw = !skip && step === "fit" && hasSavedBody && (!bodyConsent || !bodyTyped);
-    const bodyFilled = !skip && step === "fit" && bodyTyped && !withdraw;
-    if (bodyFilled && !bodyConsent) {
-      setError("To save measurements, please tick the box to agree — or clear them.");
-      return;
-    }
-    if (withdraw && !window.confirm("This deletes your measurements and their history. Continue?")) {
-      setError("Nothing was saved. Tick the box to keep your measurements.");
+    // Measurements are sent ONLY while the box is ticked; unticking already
+    // withdrew (see onConsentChange), so consent is never re-recorded here.
+    const bodyFilled = !skip && step === "fit" && bodyConsent && bodyTyped;
+    if (!skip && step === "fit" && bodyConsent && !bodyTyped && bodyOnServer && showBody) {
+      setError("To remove your measurements, untick the box above them.");
       return;
     }
     setBusy(true);
     try {
       const fields = skip && step !== "about" ? {} : fieldsFor(step);
-      if (withdraw) {
-        // Records the consent as withdrawn and deletes current values + history.
-        await deleteMeasurements();
-        setHasSavedBody(false);
-        setBodyConsent(false);
-        setBody((prev) => {
-          const out = { ...prev };
-          for (const f of BODY_FIELDS) out[f.key] = { text: "", exact: null };
-          return out;
-        });
-        if (Object.keys(fields).length > 0 || completed) await saveProfile(fields, completed);
-      } else if (bodyFilled) {
+      if (bodyFilled) {
         const m: Measurements = {
           weight_kg: storedValue(body.weight_kg),
           chest_cm: storedValue(body.chest_cm),
@@ -286,7 +304,7 @@ export function Onboarding({
         };
         // Height and measurements together: one history entry.
         await saveProfileAndMeasurements(fields, m, completed);
-        setHasSavedBody(true);
+        setBodyOnServer(true);
       } else if (Object.keys(fields).length > 0 || completed) {
         await saveProfile(fields, completed);
       }
@@ -579,6 +597,25 @@ export function Onboarding({
               </div>
             ) : (
               <div className="space-y-2.5">
+                <label className="flex items-start gap-2.5 text-xs leading-relaxed" style={{ color: "var(--ink)" }}>
+                  <input
+                    type="checkbox"
+                    checked={bodyConsent}
+                    disabled={busy}
+                    onChange={(e) => void onConsentChange(e.target.checked)}
+                    className="w-4 h-4 mt-0.5"
+                  />
+                  <span>
+                    I agree that Vestry stores these measurements and uses them (including with our AI provider) only
+                    to suggest fit and sizes. They are never shared with anyone else, and I can delete them at any time
+                    in Settings.
+                  </span>
+                </label>
+                {!bodyConsent && (
+                  <p className="text-xs" style={{ color: "var(--mid-grey)" }}>
+                    Measurements are off. Tick the box to add them.
+                  </p>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   {BODY_FIELDS.map((f) => {
                     const unit = heightUnit === "ft" ? f.imperial : f.metric;
@@ -605,8 +642,13 @@ export function Onboarding({
                               setBody((prev) => ({ ...prev, [f.key]: fieldFromTyped(f.key, typed, heightUnit === "ft") }));
                             }}
                             aria-invalid={badField === f.key}
+                            // Inactive (greyed) while the box is unticked: nothing can be typed or saved.
+                            disabled={!bodyConsent}
                             className="w-full min-w-0 px-3 py-2.5 rounded-xl text-sm focus:outline-none"
-                            style={badField === f.key ? errorBorder : inputStyle}
+                            style={{
+                              ...(badField === f.key ? errorBorder : inputStyle),
+                              ...(bodyConsent ? {} : { background: "var(--warm-grey)", opacity: 0.5 }),
+                            }}
                           />
                           <span className="text-sm w-5 shrink-0">{unit}</span>
                         </span>
@@ -615,19 +657,6 @@ export function Onboarding({
                     );
                   })}
                 </div>
-                <label className="flex items-start gap-2.5 text-xs leading-relaxed" style={{ color: "var(--ink)" }}>
-                  <input
-                    type="checkbox"
-                    checked={bodyConsent}
-                    onChange={(e) => setBodyConsent(e.target.checked)}
-                    className="w-4 h-4 mt-0.5"
-                  />
-                  <span>
-                    I agree that Vestry stores these measurements and uses them (including with our AI provider) only
-                    to suggest fit and sizes. They are never shared with anyone else, and I can delete them at any time
-                    in Settings.
-                  </span>
-                </label>
               </div>
             )}
           </div>

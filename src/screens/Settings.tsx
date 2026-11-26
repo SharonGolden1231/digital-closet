@@ -43,6 +43,7 @@ export function Settings({
   account,
   profile,
   measurements,
+  bodyConsent = false,
   onMeasurementsDeleted,
   onEditAnswers,
   onConsentWithdrawn,
@@ -52,6 +53,8 @@ export function Settings({
   account: AccountStatus;
   profile: StyleProfile | null;
   measurements: Measurements | null;
+  // The measurements consent is granted (history may exist even without current values).
+  bodyConsent?: boolean;
   onMeasurementsDeleted: () => void;
   // No step: walk through all intro screens; a step: open that screen only.
   onEditAnswers: (step?: Step) => void;
@@ -175,7 +178,7 @@ export function Settings({
         <Secondary onClick={() => onEditAnswers("fit")} disabled={busy}>
           {measurements ? "Change measurements" : "Add measurements"}
         </Secondary>
-        {measurements && (
+        {(measurements || bodyConsent) && (
           <Secondary onClick={removeMeasurements} disabled={busy}>
             Remove my measurements
           </Secondary>

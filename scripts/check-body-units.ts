@@ -129,7 +129,7 @@ test("every range shown in inches/lb is really accepted, and one step outside is
 });
 
 test("the (i) text and the error repeat the same range, in the user's units", () => {
-  const keys: RangeKey[] = ["height_cm", ...MEASURE_KEYS];
+  const keys: RangeKey[] = ["height_cm", ...MEASURE_KEYS.filter((k) => k !== "weight_kg")];
   for (const k of keys) {
     for (const imperial of [true, false]) {
       const r = rangeText(k, imperial);
@@ -137,6 +137,16 @@ test("the (i) text and the error repeat the same range, in the user's units", ()
       assert.ok(rangeError(k, imperial).endsWith(`between ${r}.`), `${k} error`);
     }
   }
+  // Weight: limits still checked, but no numbers are ever shown.
+  for (const imperial of [true, false]) {
+    assert.equal(
+      helpText("weight_kg", imperial),
+      "Your current weight. Used only to improve fit suggestions; never shown to anyone."
+    );
+    assert.equal(rangeError("weight_kg", imperial), "Please check the weight you entered.");
+  }
+  assert.ok(!inRange("weight_kg", 29.9) && !inRange("weight_kg", 300.1) && inRange("weight_kg", 55));
+  assert.equal(rangeError("height_cm", false), "Height must be between 120–230 cm.");
   assert.equal(rangeError("shoulder_cm", true), "Shoulder width must be between 12–27 in.");
   assert.equal(rangeError("shoulder_cm", false), "Shoulder width must be between 30–70 cm.");
   assert.equal(

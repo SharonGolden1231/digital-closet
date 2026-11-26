@@ -33,7 +33,7 @@ export const LABELS: Record<RangeKey, string> = {
 // What to measure and how (the range is added from RANGES).
 export const HOW_TO: Record<RangeKey, string> = {
   height_cm: "Stand straight without shoes.",
-  weight_kg: "Your current weight.",
+  weight_kg: "Your current weight. Used only to improve fit suggestions; never shown to anyone.",
   chest_cm: "Around the fullest part of your chest, tape level under your arms.",
   waist_cm: "Around the narrowest part of your waist, usually just above the belly button.",
   hips_cm: "Around the fullest part of your hips and seat.",
@@ -64,12 +64,17 @@ export function rangeText(key: RangeKey, imperial: boolean): string {
   return `${lo}–${hi} in`;
 }
 
+// Weight: the limits still apply (form and server) but are never shown as numbers.
+const HIDE_RANGE: RangeKey[] = ["weight_kg"];
+
 // (i) text: how to measure, then the range in the user's units (other units in brackets).
 export function helpText(key: RangeKey, imperial: boolean): string {
+  if (HIDE_RANGE.includes(key)) return HOW_TO[key];
   return `${HOW_TO[key]} Range: ${rangeText(key, imperial)} (${rangeText(key, !imperial)}).`;
 }
 
 // Error for a value out of range, in the user's units.
 export function rangeError(key: RangeKey, imperial: boolean): string {
+  if (key === "weight_kg") return "Please check the weight you entered.";
   return `${LABELS[key]} must be between ${rangeText(key, imperial)}.`;
 }
