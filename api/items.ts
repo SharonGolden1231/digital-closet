@@ -14,12 +14,108 @@ const MAX_RAW_CHARS = 20000;
 const FALLBACK_EMOJI = "👚";
 
 const LIST_COLUMNS =
-  "id, name, category, subcategory, subcategory_confidence, brand, material, pattern, fit, color_names, ingestion_channel, display_image_source, emoji, is_complete, user_confirmed, created_at";
+  "id, name, category, subcategory, subcategory_confidence, brand, material, pattern, fit, color_names, ingestion_channel, display_image_source, emoji, is_complete, user_confirmed, created_at, " +
+  "size, size_system, size_equivalents, size_evidence, size_source, body_code_raw, fit_height_cm, fit_chest_cm, fit_waist_cm, fit_hip_cm, fit_source";
+
+// Same lists and ranges as the database checks (20261125120000_item_sizes.sql).
+const SIZE_SYSTEMS = ["letter", "EU", "US", "UK", "IT", "FR", "MX", "JP", "waist_length", "kids", "shoe", "other"];
+const FIT_RANGES: Record<string, [number, number]> = {
+  height_cm: [50, 230],
+  chest_cm: [40, 200],
+  waist_cm: [30, 200],
+  hip_cm: [40, 220],
+};
+const MAX_EQUIVALENTS = 10;
 
 function text(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null;
   const t = value.trim();
   return t.length === 0 ? null : t.slice(0, max);
+}
+
+function sizeSystem(value: unknown): string | null | undefined {
+  if (value === null || value === undefined || value === "") return null;
+  return typeof value === "string" && SIZE_SYSTEMS.includes(value) ? value : undefined;
+}
+
+// Size as printed + its system. Returns undefined fields on invalid input.
+function parseSizeText(input: any): { size: string | null; system: string | null } | { error: string } {
+  if (input.printed !== undefined && input.printed !== null && typeof input.printed !== "string") {
+    return { error: "Invalid size." };
+  }
+  const printed = typeof input.printed === "string" ? input.printed.trim() : "";
+  if (printed.length > 20) return { error: "Invalid size." };
+  const system = sizeSystem(input.system);
+  if (system === undefined) return { error: "Invalid size system." };
+  return { size: printed || null, system: printed ? system : null };
+}
+
+// Garment-fit numbers in cm; every one must be within the database range.
+function parseFit(input: any): Record<string, number | null> | { error: string } {
+  const out: Record<string, number | null> = {};
+  for (const key of Object.keys(FIT_RANGES)) {
+    const v = input?.[key];
+    if (v === null || v === undefined || v === "") {
+      out["fit_" + key] = null;
+      continue;
+    }
+    const n = typeof v === "number" ? v : Number(v);
+    const [min, max] = FIT_RANGES[key];
+    if (!Number.isFinite(n) || n < min || n > max) {
+      return { error: "Invalid measurement: " + key.replace("_cm", "") + "." };
+    }
+    out["fit_" + key] = Math.round(n * 10) / 10;
+  }
+  return out;
+}
+
+// Size and fit columns for a new item. "label" is accepted only on a tag
+// scan; anything else the person entered counts as "user".
+function parseSizeColumns(body: any, channel: string): Record<string, unknown> | { error: string } {
+  const cols: Record<string, unknown> = {};
+  const fromLabel = (s: unknown) => (s === "label" && channel === "tag" ? "label" : "user");
+
+  if (body.size && typeof body.size === "object") {
+    const s = body.size;
+    const parsed = parseSizeText(s);
+    if ("error" in parsed) return parsed;
+
+    let equivalents: { system: string; value: string }[] | null = null;
+    if (s.equivalents !== undefined && s.equivalents !== null) {
+      if (!Array.isArray(s.equivalents) || s.equivalents.length > MAX_EQUIVALENTS) {
+        return { error: "Invalid size list." };
+      }
+      equivalents = [];
+      for (const e of s.equivalents) {
+        const value = text(e?.value, 20);
+        if (!value) continue;
+        const system = sizeSystem(e?.system);
+        equivalents.push({ system: system || "other", value });
+      }
+      if (equivalents.length === 0) equivalents = null;
+    }
+
+    const evidence = s.evidence === undefined || s.evidence === null ? null : text(s.evidence, 1000);
+    if (evidence && evidence.length > 200) return { error: "Invalid size evidence." };
+    const code = s.body_code_raw === undefined || s.body_code_raw === null ? null : text(s.body_code_raw, 1000);
+    if (code && code.length > 40) return { error: "Invalid body code." };
+
+    cols.size = parsed.size;
+    cols.size_system = parsed.system;
+    cols.size_equivalents = equivalents;
+    cols.size_evidence = evidence;
+    cols.body_code_raw = code;
+    cols.size_source = parsed.size || equivalents ? fromLabel(s.source) : null;
+  }
+
+  if (body.fit && typeof body.fit === "object") {
+    const fit = parseFit(body.fit);
+    if ("error" in fit) return fit;
+    Object.assign(cols, fit);
+    const any = Object.values(fit).some((v) => v !== null);
+    cols.fit_source = any ? fromLabel(body.fit.source) : null;
+  }
+  return cols;
 }
 
 type ParsedItem = {
@@ -88,7 +184,11 @@ function parseItem(body: any, userId: string): ParsedItem | { error: string } {
     raw = body.raw;
   }
 
+  const sizeCols = parseSizeColumns(body, channel);
+  if ("error" in sizeCols) return { error: sizeCols.error as string };
+
   const row: Record<string, unknown> = {
+    ...sizeCols,
     id,
     user_id: userId,
     name,
@@ -260,9 +360,11 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true, id: parsed.row.id });
     }
 
-    // ------------------------------------------- change an item's type
-    // Only category and type change. The AI's original answer
-    // (raw_model_output) is never touched, so wrong guesses stay measurable.
+    // ------------------------------- change an item's type and/or size
+    // Only category/type and the person's size corrections change. What the
+    // AI and the label said (raw_model_output, size_evidence,
+    // size_equivalents, body_code_raw) is never touched, so wrong reads stay
+    // measurable.
     if (req.method === "PATCH") {
       const body = req.body;
       if (!body || typeof body !== "object") {
@@ -272,14 +374,45 @@ export default async function handler(req: any, res: any) {
       if (!UUID_RE.test(itemId)) {
         return res.status(400).json({ error: "Invalid item id." });
       }
-      const category = typeof body.category === "string" ? body.category : "";
-      if (!Object.prototype.hasOwnProperty.call(CATEGORY_EMOJI, category)) {
-        return res.status(400).json({ error: "Invalid category." });
+      const changesType = body.category !== undefined || body.sub_category !== undefined;
+      const changesSize = body.size !== undefined;
+      const changesFit = body.fit !== undefined;
+      if (!changesType && !changesSize && !changesFit) {
+        return res.status(400).json({ error: "Nothing to change." });
       }
+
+      const category = typeof body.category === "string" ? body.category : "";
       const subRaw =
         typeof body.sub_category === "string" ? body.sub_category.trim() : "";
-      if (subRaw.length === 0 || subRaw.length > 60) {
-        return res.status(400).json({ error: "Invalid type." });
+      if (changesType) {
+        if (!Object.prototype.hasOwnProperty.call(CATEGORY_EMOJI, category)) {
+          return res.status(400).json({ error: "Invalid category." });
+        }
+        if (subRaw.length === 0 || subRaw.length > 60) {
+          return res.status(400).json({ error: "Invalid type." });
+        }
+      }
+
+      // A correction always counts as the person's own ("user").
+      const sizeChanges: Record<string, unknown> = {};
+      if (changesSize) {
+        if (!body.size || typeof body.size !== "object") {
+          return res.status(400).json({ error: "Invalid size." });
+        }
+        const parsed = parseSizeText(body.size);
+        if ("error" in parsed) return res.status(400).json({ error: parsed.error });
+        sizeChanges.size = parsed.size;
+        sizeChanges.size_system = parsed.system;
+        sizeChanges.size_source = parsed.size ? "user" : null;
+      }
+      if (changesFit) {
+        if (!body.fit || typeof body.fit !== "object") {
+          return res.status(400).json({ error: "Invalid measurements." });
+        }
+        const fit = parseFit(body.fit);
+        if ("error" in fit) return res.status(400).json({ error: fit.error });
+        Object.assign(sizeChanges, fit);
+        sizeChanges.fit_source = Object.values(fit).some((v) => v !== null) ? "user" : null;
       }
 
       // Row-level security hides other users' items, so a missing row and
@@ -296,14 +429,14 @@ export default async function handler(req: any, res: any) {
       }
       if (!current) return res.status(404).json({ error: "Item not found." });
 
-      const changes: Record<string, unknown> = {
-        category,
-        subcategory: subRaw,
-        user_confirmed: true,
-      };
-      // An item without a photo shows its category's emoji.
-      if ((current as any).display_image_source === "emoji") {
-        changes.emoji = CATEGORY_EMOJI[category] ?? FALLBACK_EMOJI;
+      const changes: Record<string, unknown> = { ...sizeChanges, user_confirmed: true };
+      if (changesType) {
+        changes.category = category;
+        changes.subcategory = subRaw;
+        // An item without a photo shows its category's emoji.
+        if ((current as any).display_image_source === "emoji") {
+          changes.emoji = CATEGORY_EMOJI[category] ?? FALLBACK_EMOJI;
+        }
       }
 
       const { data: updated, error: updateError } = await db
