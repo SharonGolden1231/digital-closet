@@ -2,8 +2,13 @@ import { useState } from "react";
 import { Page, Title, Label, Chip, ChipGroup, Primary, TextLink, ErrorNote, inputStyle } from "./ui";
 import {
   AGE_BANDS, SHOPS_FOR, WEEKDAYS, WEEKENDS, STYLES, GOALS, BRAND_TIERS, COMMON_BRANDS,
-  FIT_ISSUES, COLOR_SWATCHES, cmToFeetInches, feetInchesToCm,
+  FIT_ISSUES, COLOR_SWATCHES,
 } from "./options";
+import {
+  fieldFromStored, fieldFromTyped, fieldInUnits, storedValue,
+  heightFromStored, heightFromTypedCm, heightFromTypedFtIn, heightValue as heightCm,
+} from "../lib/bodyUnits";
+import type { BodyKey, BodyField, HeightField } from "../lib/bodyUnits";
 import type { Option } from "./options";
 import { saveProfile, saveProfileAndMeasurements, ApiError, EMPTY_PROFILE } from "../lib/account";
 import type { StyleProfile, Measurements } from "../lib/account";
@@ -25,21 +30,7 @@ const BODY_FIELDS = [
   { key: "hips_cm", label: "Hips", imperial: "in", metric: "cm" },
   { key: "inseam_cm", label: "Inseam", imperial: "in", metric: "cm" },
   { key: "shoulder_cm", label: "Shoulders", imperial: "in", metric: "cm" },
-] as const;
-type BodyKey = (typeof BODY_FIELDS)[number]["key"];
-
-function toDisplay(key: BodyKey, v: number | null, imperial: boolean): string {
-  if (v === null || v === undefined) return "";
-  if (!imperial) return String(v);
-  return key === "weight_kg" ? String(Math.round(v * 2.20462)) : String(Math.round((v / 2.54) * 10) / 10);
-}
-
-function toStored(key: BodyKey, raw: string, imperial: boolean): number | null {
-  const n = parseFloat(raw.replace(",", "."));
-  if (!Number.isFinite(n) || n <= 0) return null;
-  if (!imperial) return Math.round(n * 10) / 10;
-  return key === "weight_kg" ? Math.round((n / 2.20462) * 10) / 10 : Math.round(n * 2.54 * 10) / 10;
-}
+] as const satisfies readonly { key: BodyKey; label: string; imperial: string; metric: string }[];
 
 function toggle(list: string[], id: string, max: number): string[] {
   if (list.includes(id)) return list.filter((x) => x !== id);
@@ -102,14 +93,12 @@ export function Onboarding({
   // Height and measurements share one unit switch; start with the saved units.
   const imperialStart = (initialMeasurements?.units ?? "imperial") === "imperial";
   const [heightUnit, setHeightUnit] = useState<"ft" | "cm">(imperialStart ? "ft" : "cm");
-  const initFtIn = p.height_cm ? cmToFeetInches(p.height_cm) : { ft: 0, inch: 0 };
-  const [ft, setFt] = useState(initFtIn.ft ? String(initFtIn.ft) : "");
-  const [inch, setInch] = useState(p.height_cm ? String(initFtIn.inch) : "");
-  const [cm, setCm] = useState(p.height_cm ? String(p.height_cm) : "");
+  // Each field keeps its exact cm/kg value: untouched values are saved as stored.
+  const [height, setHeight] = useState<HeightField>(() => heightFromStored(p.height_cm));
   const [showBody, setShowBody] = useState(Boolean(initialMeasurements));
-  const [body, setBody] = useState<Record<BodyKey, string>>(() => {
-    const out = {} as Record<BodyKey, string>;
-    for (const f of BODY_FIELDS) out[f.key] = toDisplay(f.key, (initialMeasurements as any)?.[f.key] ?? null, imperialStart);
+  const [body, setBody] = useState<Record<BodyKey, BodyField>>(() => {
+    const out = {} as Record<BodyKey, BodyField>;
+    for (const f of BODY_FIELDS) out[f.key] = fieldFromStored(f.key, initialMeasurements?.[f.key], imperialStart);
     return out;
   });
   // Already agreed earlier: the box starts ticked (it can still be unticked).
@@ -118,36 +107,18 @@ export function Onboarding({
   const step: Step = STEPS[stepIdx];
   const set = (patch: Partial<StyleProfile>) => setP((prev) => ({ ...prev, ...patch }));
 
-  const heightValue = (): number | null => {
-    if (heightUnit === "cm") {
-      const n = parseInt(cm, 10);
-      return Number.isFinite(n) ? n : null;
-    }
-    const f = parseInt(ft, 10);
-    const i = parseInt(inch || "0", 10);
-    return Number.isFinite(f) && f > 0 ? feetInchesToCm(f, Number.isFinite(i) ? i : 0) : null;
-  };
+  const heightValue = (): number | null => heightCm(height);
 
-  // One switch for height and measurements: what is typed is converted, so a
-  // value never changes meaning when the unit changes. Everything is stored in cm.
+  // One switch for height and measurements. Only the text changes; the exact
+  // cm/kg values stay, so switching back and forth never changes a value.
   const switchUnits = () => {
-    const wasImperial = heightUnit === "ft";
-    const h = heightValue();
-    if (h !== null) {
-      const fi = cmToFeetInches(h);
-      setFt(String(fi.ft));
-      setInch(String(fi.inch));
-      setCm(String(h));
-    }
+    const toImperial = heightUnit !== "ft";
     setBody((prev) => {
       const out = { ...prev };
-      for (const f of BODY_FIELDS) {
-        const stored = toStored(f.key, prev[f.key], wasImperial);
-        if (stored !== null) out[f.key] = toDisplay(f.key, stored, !wasImperial);
-      }
+      for (const f of BODY_FIELDS) out[f.key] = fieldInUnits(f.key, prev[f.key], toImperial);
       return out;
     });
-    setHeightUnit(wasImperial ? "cm" : "ft");
+    setHeightUnit(toImperial ? "ft" : "cm");
   };
 
   // The fields each screen owns (only these are sent when it is saved).
@@ -196,7 +167,7 @@ export function Onboarding({
     // Editing one screen does not re-stamp "onboarding completed".
     const completed = finalStep && !single;
     const imperial = heightUnit === "ft";
-    const bodyFilled = !skip && step === "fit" && showBody && BODY_FIELDS.some((f) => body[f.key].trim() !== "");
+    const bodyFilled = !skip && step === "fit" && showBody && BODY_FIELDS.some((f) => body[f.key].text.trim() !== "");
     if (bodyFilled && !bodyConsent) {
       setError("To save measurements, please tick the box to agree — or clear them.");
       return;
@@ -206,12 +177,12 @@ export function Onboarding({
       const fields = skip && step !== "about" ? {} : fieldsFor(step);
       if (bodyFilled) {
         const m: Measurements = {
-          weight_kg: toStored("weight_kg", body.weight_kg, imperial),
-          chest_cm: toStored("chest_cm", body.chest_cm, imperial),
-          waist_cm: toStored("waist_cm", body.waist_cm, imperial),
-          hips_cm: toStored("hips_cm", body.hips_cm, imperial),
-          inseam_cm: toStored("inseam_cm", body.inseam_cm, imperial),
-          shoulder_cm: toStored("shoulder_cm", body.shoulder_cm, imperial),
+          weight_kg: storedValue(body.weight_kg),
+          chest_cm: storedValue(body.chest_cm),
+          waist_cm: storedValue(body.waist_cm),
+          hips_cm: storedValue(body.hips_cm),
+          inseam_cm: storedValue(body.inseam_cm),
+          shoulder_cm: storedValue(body.shoulder_cm),
           units: imperial ? "imperial" : "metric",
         };
         // Height and measurements together: one history entry.
@@ -441,16 +412,16 @@ export function Onboarding({
                 <>
                   <input
                     inputMode="numeric"
-                    value={ft}
-                    onChange={(e) => setFt(e.target.value.replace(/\D/g, "").slice(0, 1))}
+                    value={height.ft}
+                    onChange={(e) => setHeight(heightFromTypedFtIn(e.target.value.replace(/\D/g, "").slice(0, 1), height.inch))}
                     placeholder="ft"
                     className="w-20 px-3 py-2.5 rounded-xl text-sm focus:outline-none"
                     style={inputStyle}
                   />
                   <input
                     inputMode="numeric"
-                    value={inch}
-                    onChange={(e) => setInch(e.target.value.replace(/\D/g, "").slice(0, 2))}
+                    value={height.inch}
+                    onChange={(e) => setHeight(heightFromTypedFtIn(height.ft, e.target.value.replace(/\D/g, "").slice(0, 2)))}
                     placeholder="in"
                     className="w-20 px-3 py-2.5 rounded-xl text-sm focus:outline-none"
                     style={inputStyle}
@@ -459,8 +430,8 @@ export function Onboarding({
               ) : (
                 <input
                   inputMode="numeric"
-                  value={cm}
-                  onChange={(e) => setCm(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                  value={height.cm}
+                  onChange={(e) => setHeight(heightFromTypedCm(e.target.value.replace(/\D/g, "").slice(0, 3)))}
                   placeholder="cm"
                   className="w-24 px-3 py-2.5 rounded-xl text-sm focus:outline-none"
                   style={inputStyle}
@@ -491,10 +462,11 @@ export function Onboarding({
                       </span>
                       <input
                         inputMode="decimal"
-                        value={body[f.key]}
-                        onChange={(e) =>
-                          setBody((prev) => ({ ...prev, [f.key]: e.target.value.replace(/[^0-9.,]/g, "").slice(0, 5) }))
-                        }
+                        value={body[f.key].text}
+                        onChange={(e) => {
+                          const typed = e.target.value.replace(/[^0-9.,]/g, "").slice(0, 5);
+                          setBody((prev) => ({ ...prev, [f.key]: fieldFromTyped(f.key, typed, heightUnit === "ft") }));
+                        }}
                         className="w-full px-3 py-2.5 rounded-xl text-sm focus:outline-none"
                         style={inputStyle}
                       />
