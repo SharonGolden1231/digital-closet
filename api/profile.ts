@@ -6,6 +6,7 @@ import { userClient, COLOR_HEX } from "./_lib/closet.js";
 //   GET  -> { profile | null, measurements | null, bodyConsent, isAdmin }
 //   POST {answers, completed?: boolean}       -> save answers (partial allowed)
 //   POST {measurements: {...}, bodyConsent: true} -> record consent, save numbers
+//   POST {answers, completed?, measurements, bodyConsent: true} -> both at once
 //   POST {measurements: null}                 -> withdraw consent and DELETE them
 //                                                (current values AND history)
 // Each measurement save, and each height change, adds a dated entry to
@@ -246,34 +247,39 @@ export default async function handler(req: any, res: any) {
 
     const body = req.body && typeof req.body === "object" ? req.body : {};
 
-    // ---- body measurements (sensitive: separate consent) ----
-    if (Object.prototype.hasOwnProperty.call(body, "measurements")) {
-      if (body.measurements === null) {
-        // Withdraw: record the decision, then delete the numbers.
-        const { error: cErr } = await db.rpc("record_consent", {
-          p_type: "body_measurements",
-          p_version: BODY_CONSENT_VERSION,
-          p_granted: false,
-        });
-        if (cErr) {
-          console.error("body consent withdraw failed:", cErr.message);
-          return res.status(500).json({ error: "Couldn't save your choice." });
-        }
-        const [hist, cur] = await Promise.all([
-          db.from("body_measurement_entries").delete().eq("user_id", auth.userId),
-          db.from("body_measurements").delete().eq("user_id", auth.userId),
-        ]);
-        const dErr = hist.error || cur.error;
-        if (dErr) {
-          console.error("body delete failed:", hist.error?.message, cur.error?.message);
-          return res.status(500).json({ error: "Couldn't delete your measurements." });
-        }
-        return res.status(200).json({ ok: true });
+    const has = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+
+    // ---- withdraw the body-measurements consent: delete current values AND history ----
+    if (has(body, "measurements") && body.measurements === null) {
+      const { error: cErr } = await db.rpc("record_consent", {
+        p_type: "body_measurements",
+        p_version: BODY_CONSENT_VERSION,
+        p_granted: false,
+      });
+      if (cErr) {
+        console.error("body consent withdraw failed:", cErr.message);
+        return res.status(500).json({ error: "Couldn't save your choice." });
       }
+      const [hist, cur] = await Promise.all([
+        db.from("body_measurement_entries").delete().eq("user_id", auth.userId),
+        db.from("body_measurements").delete().eq("user_id", auth.userId),
+      ]);
+      const dErr = hist.error || cur.error;
+      if (dErr) {
+        console.error("body delete failed:", hist.error?.message, cur.error?.message);
+        return res.status(500).json({ error: "Couldn't delete your measurements." });
+      }
+      return res.status(200).json({ ok: true });
+    }
+
+    // One request may carry measurements (sensitive: separate consent),
+    // answers, or both. The Fit screen sends height and measurements together
+    // so they make ONE history entry. Everything is checked before any write.
+    let m: Record<string, unknown> | null = null;
+    if (has(body, "measurements")) {
       if (body.bodyConsent !== true) {
         return res.status(400).json({ error: "Please tick the box to agree before saving measurements.", field: "bodyConsent" });
       }
-      let m: Record<string, unknown>;
       try {
         m = buildMeasurements(body.measurements);
       } catch (e) {
@@ -282,6 +288,33 @@ export default async function handler(req: any, res: any) {
         }
         throw e;
       }
+    }
+
+    let row: Record<string, unknown> | null = null;
+    if (!m || has(body, "answers")) {
+      try {
+        row = buildUpdate(body.answers);
+      } catch (e) {
+        if (e instanceof Invalid) {
+          return res.status(400).json({ error: "Please check your answers.", field: e.message });
+        }
+        throw e;
+      }
+      if (body.completed === true) {
+        // Finishing requires the age check: the pilot is 18+ only.
+        const adult =
+          row.adult_confirmed ??
+          (
+            await db.from("style_profiles").select("adult_confirmed").eq("user_id", auth.userId).maybeSingle()
+          ).data?.adult_confirmed;
+        if (adult !== true) {
+          return res.status(400).json({ error: "Vestry is for people aged 18 and over.", field: "adult_confirmed" });
+        }
+        row.onboarding_completed_at = new Date().toISOString();
+      }
+    }
+
+    if (m) {
       const { error: cErr } = await db.rpc("record_consent", {
         p_type: "body_measurements",
         p_version: BODY_CONSENT_VERSION,
@@ -298,52 +331,27 @@ export default async function handler(req: any, res: any) {
         console.error("body save failed:", bErr.code, bErr.message);
         return res.status(500).json({ error: "Couldn't save your measurements." });
       }
-      // Saving again is safe: an unchanged snapshot adds no second entry.
+    }
+
+    if (row) {
+      const { error } = await db
+        .from("style_profiles")
+        .upsert({ user_id: auth.userId, ...row }, { onConflict: "user_id" });
+      if (error) {
+        console.error("profile save failed:", error.code, error.message);
+        return res.status(500).json({ error: "Couldn't save your answers." });
+      }
+    }
+
+    // New measurements or a height change add one history entry (only with
+    // the consent; unchanged values add nothing, so a retry is safe).
+    if (m || (row && has(row, "height_cm"))) {
       const hErr = await recordEntry(db, auth.userId);
       if (hErr) {
         console.error("body history failed:", hErr);
-        return res.status(500).json({ error: "Couldn't save your measurements." });
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    let row: Record<string, unknown>;
-    try {
-      row = buildUpdate(body.answers);
-    } catch (e) {
-      if (e instanceof Invalid) {
-        return res.status(400).json({ error: "Please check your answers.", field: e.message });
-      }
-      throw e;
-    }
-
-    if (body.completed === true) {
-      // Finishing requires the age check: the pilot is 18+ only.
-      const adult =
-        row.adult_confirmed ??
-        (
-          await db.from("style_profiles").select("adult_confirmed").eq("user_id", auth.userId).maybeSingle()
-        ).data?.adult_confirmed;
-      if (adult !== true) {
-        return res.status(400).json({ error: "Vestry is for people aged 18 and over.", field: "adult_confirmed" });
-      }
-      row.onboarding_completed_at = new Date().toISOString();
-    }
-
-    const { error } = await db
-      .from("style_profiles")
-      .upsert({ user_id: auth.userId, ...row }, { onConflict: "user_id" });
-    if (error) {
-      console.error("profile save failed:", error.code, error.message);
-      return res.status(500).json({ error: "Couldn't save your answers." });
-    }
-    // A height change is part of the measurement history (only with the
-    // body-measurements consent; unchanged values add nothing).
-    if (Object.prototype.hasOwnProperty.call(row, "height_cm")) {
-      const hErr = await recordEntry(db, auth.userId);
-      if (hErr) {
-        console.error("height history failed:", hErr);
-        return res.status(500).json({ error: "Couldn't save your answers." });
+        return res
+          .status(500)
+          .json({ error: m ? "Couldn't save your measurements." : "Couldn't save your answers." });
       }
     }
     return res.status(200).json({ ok: true });

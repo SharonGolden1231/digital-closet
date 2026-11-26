@@ -5,16 +5,18 @@ import {
   FIT_ISSUES, COLOR_SWATCHES, cmToFeetInches, feetInchesToCm,
 } from "./options";
 import type { Option } from "./options";
-import { saveProfile, saveMeasurements, ApiError, EMPTY_PROFILE } from "../lib/account";
+import { saveProfile, saveProfileAndMeasurements, ApiError, EMPTY_PROFILE } from "../lib/account";
 import type { StyleProfile, Measurements } from "../lib/account";
 import { track } from "../lib/track";
 
 // The intro questions: 7 short screens, tap answers, every screen skippable
 // except the age check. Each "Next" saves what is on that screen, so nothing
 // is lost if the person closes the app half way.
+// From Settings, one screen can be opened on its own (startStep): "Save"
+// then saves that screen and goes back.
 
-const STEPS = ["about", "shop", "week", "style", "goals", "brands", "fit"] as const;
-type Step = (typeof STEPS)[number];
+export const STEPS = ["about", "shop", "week", "style", "goals", "brands", "fit"] as const;
+export type Step = (typeof STEPS)[number];
 
 const BODY_FIELDS = [
   { key: "weight_kg", label: "Weight", imperial: "lb", metric: "kg" },
@@ -22,6 +24,7 @@ const BODY_FIELDS = [
   { key: "waist_cm", label: "Waist", imperial: "in", metric: "cm" },
   { key: "hips_cm", label: "Hips", imperial: "in", metric: "cm" },
   { key: "inseam_cm", label: "Inseam", imperial: "in", metric: "cm" },
+  { key: "shoulder_cm", label: "Shoulders", imperial: "in", metric: "cm" },
 ] as const;
 type BodyKey = (typeof BODY_FIELDS)[number]["key"];
 
@@ -73,35 +76,44 @@ function Many({
 export function Onboarding({
   initial,
   initialMeasurements = null,
+  initialBodyConsent = false,
   editing = false,
+  startStep,
   onDone,
   onCancel,
 }: {
   initial: StyleProfile | null;
   initialMeasurements?: Measurements | null;
+  // The measurements consent is already given (and not withdrawn).
+  initialBodyConsent?: boolean;
   editing?: boolean;
+  // Editing one screen only (opened from Settings).
+  startStep?: Step;
   onDone: () => void;
   onCancel?: () => void;
 }) {
+  const single = editing && startStep !== undefined;
   const [p, setP] = useState<StyleProfile>({ ...EMPTY_PROFILE, ...(initial ?? {}) });
-  const [stepIdx, setStepIdx] = useState(0);
+  const [stepIdx, setStepIdx] = useState(single ? STEPS.indexOf(startStep) : 0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [underage, setUnderage] = useState(false);
   const [brandInput, setBrandInput] = useState("");
-  const [heightUnit, setHeightUnit] = useState<"ft" | "cm">("ft");
+  // Height and measurements share one unit switch; start with the saved units.
+  const imperialStart = (initialMeasurements?.units ?? "imperial") === "imperial";
+  const [heightUnit, setHeightUnit] = useState<"ft" | "cm">(imperialStart ? "ft" : "cm");
   const initFtIn = p.height_cm ? cmToFeetInches(p.height_cm) : { ft: 0, inch: 0 };
   const [ft, setFt] = useState(initFtIn.ft ? String(initFtIn.ft) : "");
   const [inch, setInch] = useState(p.height_cm ? String(initFtIn.inch) : "");
   const [cm, setCm] = useState(p.height_cm ? String(p.height_cm) : "");
-  const imperialStart = (initialMeasurements?.units ?? "imperial") === "imperial";
   const [showBody, setShowBody] = useState(Boolean(initialMeasurements));
   const [body, setBody] = useState<Record<BodyKey, string>>(() => {
     const out = {} as Record<BodyKey, string>;
     for (const f of BODY_FIELDS) out[f.key] = toDisplay(f.key, (initialMeasurements as any)?.[f.key] ?? null, imperialStart);
     return out;
   });
-  const [bodyConsent, setBodyConsent] = useState(false);
+  // Already agreed earlier: the box starts ticked (it can still be unticked).
+  const [bodyConsent, setBodyConsent] = useState(initialBodyConsent && Boolean(initialMeasurements));
 
   const step: Step = STEPS[stepIdx];
   const set = (patch: Partial<StyleProfile>) => setP((prev) => ({ ...prev, ...patch }));
@@ -114,6 +126,28 @@ export function Onboarding({
     const f = parseInt(ft, 10);
     const i = parseInt(inch || "0", 10);
     return Number.isFinite(f) && f > 0 ? feetInchesToCm(f, Number.isFinite(i) ? i : 0) : null;
+  };
+
+  // One switch for height and measurements: what is typed is converted, so a
+  // value never changes meaning when the unit changes. Everything is stored in cm.
+  const switchUnits = () => {
+    const wasImperial = heightUnit === "ft";
+    const h = heightValue();
+    if (h !== null) {
+      const fi = cmToFeetInches(h);
+      setFt(String(fi.ft));
+      setInch(String(fi.inch));
+      setCm(String(h));
+    }
+    setBody((prev) => {
+      const out = { ...prev };
+      for (const f of BODY_FIELDS) {
+        const stored = toStored(f.key, prev[f.key], wasImperial);
+        if (stored !== null) out[f.key] = toDisplay(f.key, stored, !wasImperial);
+      }
+      return out;
+    });
+    setHeightUnit(wasImperial ? "cm" : "ft");
   };
 
   // The fields each screen owns (only these are sent when it is saved).
@@ -157,7 +191,10 @@ export function Onboarding({
         return;
       }
     }
-    const last = stepIdx === STEPS.length - 1;
+    const finalStep = stepIdx === STEPS.length - 1;
+    const last = single || finalStep;
+    // Editing one screen does not re-stamp "onboarding completed".
+    const completed = finalStep && !single;
     const imperial = heightUnit === "ft";
     const bodyFilled = !skip && step === "fit" && showBody && BODY_FIELDS.some((f) => body[f.key].trim() !== "");
     if (bodyFilled && !bodyConsent) {
@@ -166,6 +203,7 @@ export function Onboarding({
     }
     setBusy(true);
     try {
+      const fields = skip && step !== "about" ? {} : fieldsFor(step);
       if (bodyFilled) {
         const m: Measurements = {
           weight_kg: toStored("weight_kg", body.weight_kg, imperial),
@@ -173,17 +211,17 @@ export function Onboarding({
           waist_cm: toStored("waist_cm", body.waist_cm, imperial),
           hips_cm: toStored("hips_cm", body.hips_cm, imperial),
           inseam_cm: toStored("inseam_cm", body.inseam_cm, imperial),
+          shoulder_cm: toStored("shoulder_cm", body.shoulder_cm, imperial),
           units: imperial ? "imperial" : "metric",
         };
-        await saveMeasurements(m);
-      }
-      const fields = skip && step !== "about" ? {} : fieldsFor(step);
-      if (Object.keys(fields).length > 0 || last) {
-        await saveProfile(fields, last);
+        // Height and measurements together: one history entry.
+        await saveProfileAndMeasurements(fields, m, completed);
+      } else if (Object.keys(fields).length > 0 || completed) {
+        await saveProfile(fields, completed);
       }
       track("onboarding_step", { step, skipped: skip, editing });
       if (last) {
-        if (!editing) track("onboarding_done");
+        if (!editing && completed) track("onboarding_done");
         onDone();
         return;
       }
@@ -428,7 +466,7 @@ export function Onboarding({
                   style={inputStyle}
                 />
               )}
-              <TextLink onClick={() => setHeightUnit(heightUnit === "ft" ? "cm" : "ft")}>
+              <TextLink onClick={switchUnits}>
                 {heightUnit === "ft" ? "Use cm" : "Use ft / in"}
               </TextLink>
             </div>
@@ -542,17 +580,27 @@ export function Onboarding({
 
       <div className="space-y-3">
         <Primary onClick={() => next(false)} disabled={busy}>
-          {busy ? "Saving…" : stepIdx === STEPS.length - 1 ? (editing ? "Save" : "Finish") : "Next"}
+          {busy
+            ? "Saving…"
+            : single
+              ? "Save"
+              : stepIdx === STEPS.length - 1
+                ? editing
+                  ? "Save"
+                  : "Finish"
+                : "Next"}
         </Primary>
         <div className="flex items-center justify-between">
-          {stepIdx > 0 ? (
+          {single && onCancel ? (
+            <TextLink onClick={onCancel}>Cancel</TextLink>
+          ) : stepIdx > 0 ? (
             <TextLink onClick={() => setStepIdx((i) => i - 1)}>Back</TextLink>
           ) : editing && onCancel ? (
             <TextLink onClick={onCancel}>Cancel</TextLink>
           ) : (
             <span />
           )}
-          {step !== "about" && <TextLink onClick={() => next(true)}>Skip</TextLink>}
+          {step !== "about" && !single && <TextLink onClick={() => next(true)}>Skip</TextLink>}
         </div>
       </div>
     </Page>

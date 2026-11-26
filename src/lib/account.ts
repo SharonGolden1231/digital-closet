@@ -90,6 +90,7 @@ export type Measurements = {
   waist_cm: number | null;
   hips_cm: number | null;
   inseam_cm: number | null;
+  shoulder_cm: number | null;
   units: "imperial" | "metric";
 };
 
@@ -111,6 +112,14 @@ export const deleteMeasurements = () => call<{ ok: true }>("/api/profile", post(
 
 export const saveProfile = (answers: Partial<StyleProfile>, completed = false) =>
   call<{ ok: true }>("/api/profile", post({ answers, completed }));
+
+// Answers (e.g. height) and measurements in ONE request, so the measurement
+// history gets one entry for the whole Fit screen.
+export const saveProfileAndMeasurements = (
+  answers: Partial<StyleProfile>,
+  measurements: Measurements,
+  completed = false
+) => call<{ ok: true }>("/api/profile", post({ answers, completed, measurements, bodyConsent: true }));
 
 export const setConsent = (granted: boolean) =>
   call<{ ok: true }>("/api/account", post({ action: "consent", granted }));
