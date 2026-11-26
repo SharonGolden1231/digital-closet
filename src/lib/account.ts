@@ -55,10 +55,13 @@ export const EMPTY_PROFILE: StyleProfile = {
 export class ApiError extends Error {
   status: number;
   code?: string;
-  constructor(message: string, status: number, code?: string) {
+  // Which field the server refused (e.g. "shoulder_cm"), when it says.
+  field?: string;
+  constructor(message: string, status: number, code?: string, field?: string) {
     super(message);
     this.status = status;
     this.code = code;
+    this.field = field;
   }
 }
 
@@ -71,7 +74,12 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     data = {};
   }
   if (!res.ok) {
-    throw new ApiError(data.error || "Something went wrong — please try again.", res.status, data.code);
+    throw new ApiError(
+      data.error || "Something went wrong — please try again.",
+      res.status,
+      data.code,
+      typeof data.field === "string" ? data.field : undefined
+    );
   }
   return data as T;
 }
@@ -90,6 +98,7 @@ export type Measurements = {
   waist_cm: number | null;
   hips_cm: number | null;
   inseam_cm: number | null;
+  shoulder_cm: number | null;
   units: "imperial" | "metric";
 };
 
@@ -111,6 +120,14 @@ export const deleteMeasurements = () => call<{ ok: true }>("/api/profile", post(
 
 export const saveProfile = (answers: Partial<StyleProfile>, completed = false) =>
   call<{ ok: true }>("/api/profile", post({ answers, completed }));
+
+// Answers (e.g. height) and measurements in ONE request, so the measurement
+// history gets one entry for the whole Fit screen.
+export const saveProfileAndMeasurements = (
+  answers: Partial<StyleProfile>,
+  measurements: Measurements,
+  completed = false
+) => call<{ ok: true }>("/api/profile", post({ answers, completed, measurements, bodyConsent: true }));
 
 export const setConsent = (granted: boolean) =>
   call<{ ok: true }>("/api/account", post({ action: "consent", granted }));

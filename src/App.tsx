@@ -42,6 +42,7 @@ import { identify, track, resetTracking } from "./lib/track";
 import { InviteSignUp } from "./screens/InviteSignUp";
 import { ConsentScreen } from "./screens/ConsentScreen";
 import { Onboarding } from "./screens/Onboarding";
+import type { Step as OnboardingStep } from "./screens/Onboarding";
 import { Settings } from "./screens/Settings";
 import { DeletionPending } from "./screens/DeletionPending";
 import { Page, Title, Primary, Secondary } from "./screens/ui";
@@ -2445,6 +2446,8 @@ export default function App() {
   const [account, setAccount] = useState<AccountStatus | null>(null);
   const [prof, setProf] = useState<ProfileResponse | null>(null);
   const [editingAnswers, setEditingAnswers] = useState(false);
+  // Set when Settings opens one intro screen on its own (e.g. height & measurements).
+  const [editStep, setEditStep] = useState<OnboardingStep | undefined>(undefined);
   // Opened from a password-reset email: ask for the new password first.
   const [recovering, setRecovering] = useState(OPENED_FROM_RECOVERY_LINK);
   const [items, setItems] = useState<ClosetItem[]>([]);
@@ -2796,7 +2799,9 @@ export default function App() {
       <Onboarding
         initial={prof?.profile ?? null}
         initialMeasurements={prof?.measurements ?? null}
+        initialBodyConsent={prof?.bodyConsent === true}
         editing={editingAnswers}
+        startStep={editingAnswers ? editStep : undefined}
         onCancel={editingAnswers ? () => setEditingAnswers(false) : undefined}
         onDone={() => {
           setEditingAnswers(false);
@@ -2982,8 +2987,12 @@ export default function App() {
             account={account}
             profile={prof?.profile ?? null}
             measurements={prof?.measurements ?? null}
+            bodyConsent={prof?.bodyConsent === true}
             onMeasurementsDeleted={() => void loadGate()}
-            onEditAnswers={() => setEditingAnswers(true)}
+            onEditAnswers={(step) => {
+              setEditStep(step);
+              setEditingAnswers(true);
+            }}
             onConsentWithdrawn={() => { setGate("loading"); void loadGate(); }}
             onDeletionRequested={() => void supabase.auth.signOut()}
             onSignOut={signOut}

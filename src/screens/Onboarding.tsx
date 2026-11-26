@@ -1,42 +1,77 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { Page, Title, Label, Chip, ChipGroup, Primary, TextLink, ErrorNote, inputStyle } from "./ui";
 import {
   AGE_BANDS, SHOPS_FOR, WEEKDAYS, WEEKENDS, STYLES, GOALS, BRAND_TIERS, COMMON_BRANDS,
-  FIT_ISSUES, COLOR_SWATCHES, cmToFeetInches, feetInchesToCm,
+  FIT_ISSUES, COLOR_SWATCHES,
 } from "./options";
+import {
+  fieldFromStored, fieldFromTyped, fieldInUnits, storedValue,
+  heightFromStored, heightFromTypedCm, heightFromTypedFtIn, heightValue as heightCm,
+} from "../lib/bodyUnits";
+import type { BodyKey, BodyField, HeightField } from "../lib/bodyUnits";
+import { MEASURE_KEYS, LABELS, inRange, rangeError, helpText } from "../../shared/bodyRanges";
+import type { RangeKey } from "../../shared/bodyRanges";
 import type { Option } from "./options";
-import { saveProfile, saveMeasurements, ApiError, EMPTY_PROFILE } from "../lib/account";
+import {
+  saveProfile, saveProfileAndMeasurements, deleteMeasurements, ApiError, EMPTY_PROFILE,
+} from "../lib/account";
 import type { StyleProfile, Measurements } from "../lib/account";
 import { track } from "../lib/track";
 
 // The intro questions: 7 short screens, tap answers, every screen skippable
 // except the age check. Each "Next" saves what is on that screen, so nothing
 // is lost if the person closes the app half way.
+// From Settings, one screen can be opened on its own (startStep): "Save"
+// then saves that screen and goes back.
 
-const STEPS = ["about", "shop", "week", "style", "goals", "brands", "fit"] as const;
-type Step = (typeof STEPS)[number];
+export const STEPS = ["about", "shop", "week", "style", "goals", "brands", "fit"] as const;
+export type Step = (typeof STEPS)[number];
 
-const BODY_FIELDS = [
-  { key: "weight_kg", label: "Weight", imperial: "lb", metric: "kg" },
-  { key: "chest_cm", label: "Chest / bust", imperial: "in", metric: "cm" },
-  { key: "waist_cm", label: "Waist", imperial: "in", metric: "cm" },
-  { key: "hips_cm", label: "Hips", imperial: "in", metric: "cm" },
-  { key: "inseam_cm", label: "Inseam", imperial: "in", metric: "cm" },
-] as const;
-type BodyKey = (typeof BODY_FIELDS)[number]["key"];
+// Names, ranges and (i) text come from shared/bodyRanges.ts (also used by the server).
+const BODY_FIELDS: { key: BodyKey; label: string; imperial: string; metric: string }[] = MEASURE_KEYS.map((key) => ({
+  key,
+  label: LABELS[key],
+  imperial: key === "weight_kg" ? "lb" : "in",
+  metric: key === "weight_kg" ? "kg" : "cm",
+}));
 
-function toDisplay(key: BodyKey, v: number | null, imperial: boolean): string {
-  if (v === null || v === undefined) return "";
-  if (!imperial) return String(v);
-  return key === "weight_kg" ? String(Math.round(v * 2.20462)) : String(Math.round((v / 2.54) * 10) / 10);
+// (i) button: tap to open the explanation, tap again or anywhere else to close
+// (works by tap on iPhone; no hover needed).
+function InfoButton({ id, label, open, onToggle }: { id: string; label: string; open: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      data-info={id}
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-label={"About " + label}
+      className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-semibold leading-none shrink-0"
+      style={{
+        border: "1px solid var(--mid-grey)",
+        color: open ? "white" : "var(--mid-grey)",
+        background: open ? "var(--emerald)" : "transparent",
+      }}
+    >
+      i
+    </button>
+  );
 }
 
-function toStored(key: BodyKey, raw: string, imperial: boolean): number | null {
-  const n = parseFloat(raw.replace(",", "."));
-  if (!Number.isFinite(n) || n <= 0) return null;
-  if (!imperial) return Math.round(n * 10) / 10;
-  return key === "weight_kg" ? Math.round((n / 2.20462) * 10) / 10 : Math.round(n * 2.54 * 10) / 10;
+function InfoText({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <p
+      data-info={id}
+      role="note"
+      className="text-xs rounded-lg px-2.5 py-2 leading-relaxed"
+      style={{ background: "var(--success-bg)", color: "var(--emerald)" }}
+    >
+      {children}
+    </p>
+  );
 }
+
+const errorBorder = { ...inputStyle, border: "1.5px solid var(--error-ink)" };
 
 function toggle(list: string[], id: string, max: number): string[] {
   if (list.includes(id)) return list.filter((x) => x !== id);
@@ -73,47 +108,76 @@ function Many({
 export function Onboarding({
   initial,
   initialMeasurements = null,
+  initialBodyConsent = false,
   editing = false,
+  startStep,
   onDone,
   onCancel,
 }: {
   initial: StyleProfile | null;
   initialMeasurements?: Measurements | null;
+  // The measurements consent is already given (and not withdrawn).
+  initialBodyConsent?: boolean;
   editing?: boolean;
+  // Editing one screen only (opened from Settings).
+  startStep?: Step;
   onDone: () => void;
   onCancel?: () => void;
 }) {
+  const single = editing && startStep !== undefined;
   const [p, setP] = useState<StyleProfile>({ ...EMPTY_PROFILE, ...(initial ?? {}) });
-  const [stepIdx, setStepIdx] = useState(0);
+  const [stepIdx, setStepIdx] = useState(single ? STEPS.indexOf(startStep) : 0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [underage, setUnderage] = useState(false);
   const [brandInput, setBrandInput] = useState("");
-  const [heightUnit, setHeightUnit] = useState<"ft" | "cm">("ft");
-  const initFtIn = p.height_cm ? cmToFeetInches(p.height_cm) : { ft: 0, inch: 0 };
-  const [ft, setFt] = useState(initFtIn.ft ? String(initFtIn.ft) : "");
-  const [inch, setInch] = useState(p.height_cm ? String(initFtIn.inch) : "");
-  const [cm, setCm] = useState(p.height_cm ? String(p.height_cm) : "");
+  // Height and measurements share one unit switch; start with the saved units.
   const imperialStart = (initialMeasurements?.units ?? "imperial") === "imperial";
+  const [heightUnit, setHeightUnit] = useState<"ft" | "cm">(imperialStart ? "ft" : "cm");
+  // Each field keeps its exact cm/kg value: untouched values are saved as stored.
+  const [height, setHeight] = useState<HeightField>(() => heightFromStored(p.height_cm));
   const [showBody, setShowBody] = useState(Boolean(initialMeasurements));
-  const [body, setBody] = useState<Record<BodyKey, string>>(() => {
-    const out = {} as Record<BodyKey, string>;
-    for (const f of BODY_FIELDS) out[f.key] = toDisplay(f.key, (initialMeasurements as any)?.[f.key] ?? null, imperialStart);
+  const [body, setBody] = useState<Record<BodyKey, BodyField>>(() => {
+    const out = {} as Record<BodyKey, BodyField>;
+    for (const f of BODY_FIELDS) out[f.key] = fieldFromStored(f.key, initialMeasurements?.[f.key], imperialStart);
     return out;
   });
-  const [bodyConsent, setBodyConsent] = useState(false);
+  // Already agreed earlier: the box starts ticked (it can still be unticked).
+  const [bodyConsent, setBodyConsent] = useState(initialBodyConsent && Boolean(initialMeasurements));
+  // Measurements (or their history) may exist on the server: unticking the box
+  // then withdraws at once, after a confirmation.
+  const [bodyOnServer, setBodyOnServer] = useState(Boolean(initialMeasurements) || initialBodyConsent);
+  // The field the last error is about (highlighted), and the open (i) text.
+  const [badField, setBadField] = useState<RangeKey | null>(null);
+  const [openInfo, setOpenInfo] = useState<RangeKey | null>(null);
+
+  // Close the (i) text on a tap anywhere outside it or its button.
+  useEffect(() => {
+    if (!openInfo) return;
+    const close = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (!t?.closest?.(`[data-info="${openInfo}"]`)) setOpenInfo(null);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [openInfo]);
+  const toggleInfo = (k: RangeKey) => setOpenInfo((cur) => (cur === k ? null : k));
 
   const step: Step = STEPS[stepIdx];
   const set = (patch: Partial<StyleProfile>) => setP((prev) => ({ ...prev, ...patch }));
 
-  const heightValue = (): number | null => {
-    if (heightUnit === "cm") {
-      const n = parseInt(cm, 10);
-      return Number.isFinite(n) ? n : null;
-    }
-    const f = parseInt(ft, 10);
-    const i = parseInt(inch || "0", 10);
-    return Number.isFinite(f) && f > 0 ? feetInchesToCm(f, Number.isFinite(i) ? i : 0) : null;
+  const heightValue = (): number | null => heightCm(height);
+
+  // One switch for height and measurements. Only the text changes; the exact
+  // cm/kg values stay, so switching back and forth never changes a value.
+  const switchUnits = () => {
+    const toImperial = heightUnit !== "ft";
+    setBody((prev) => {
+      const out = { ...prev };
+      for (const f of BODY_FIELDS) out[f.key] = fieldInUnits(f.key, prev[f.key], toImperial);
+      return out;
+    });
+    setHeightUnit(toImperial ? "ft" : "cm");
   };
 
   // The fields each screen owns (only these are sent when it is saved).
@@ -141,55 +205,125 @@ export function Onboarding({
     }
   };
 
+  // The consent box acts at once. Unticking with measurements (or history) on
+  // the server asks first; Yes withdraws immediately (consent withdrawn,
+  // current values and all history deleted) and clears the fields; No keeps
+  // the box ticked and changes nothing.
+  const onConsentChange = async (checked: boolean) => {
+    if (busy) return;
+    setError("");
+    if (checked) {
+      setBodyConsent(true);
+      return;
+    }
+    if (!bodyOnServer) {
+      setBodyConsent(false);
+      return;
+    }
+    if (!window.confirm("This deletes your measurements and their history. Continue?")) return;
+    setBusy(true);
+    try {
+      await deleteMeasurements();
+      setBodyOnServer(false);
+      setBodyConsent(false);
+      setBadField(null);
+      setBody((prev) => {
+        const out = { ...prev };
+        for (const f of BODY_FIELDS) out[f.key] = { text: "", exact: null };
+        return out;
+      });
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Couldn't delete — check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Fit screen: every typed value must be a number in its allowed range
+  // (same ranges as the server). Returns the first problem, or null.
+  const checkFit = (imperial: boolean): { field: RangeKey; message: string } | null => {
+    const h = heightValue();
+    const hTyped = heightUnit === "ft" ? height.ft.trim() !== "" || height.inch.trim() !== "" : height.cm.trim() !== "";
+    if ((hTyped && h === null) || (h !== null && !inRange("height_cm", h))) {
+      return { field: "height_cm", message: rangeError("height_cm", imperial) };
+    }
+    if (!showBody || !bodyConsent) return null;
+    for (const f of BODY_FIELDS) {
+      const v = storedValue(body[f.key]);
+      const typed = body[f.key].text.trim() !== "";
+      if ((typed && v === null) || (v !== null && !inRange(f.key, v))) {
+        return { field: f.key, message: rangeError(f.key, imperial) };
+      }
+    }
+    return null;
+  };
+
   const next = async (skip = false) => {
     if (busy) return;
     setError("");
+    setBadField(null);
     if (step === "about") {
       if (!p.adult_confirmed) {
         setError("Please confirm you are 18 or older to continue.");
         return;
       }
     }
+    const finalStep = stepIdx === STEPS.length - 1;
+    const last = single || finalStep;
+    // Editing one screen does not re-stamp "onboarding completed".
+    const completed = finalStep && !single;
+    const imperial = heightUnit === "ft";
     if (step === "fit" && !skip) {
-      const h = heightValue();
-      if (h !== null && (h < 120 || h > 230)) {
-        setError("That height doesn't look right — check it or leave it empty.");
+      const problem = checkFit(imperial);
+      if (problem) {
+        setError(problem.message);
+        setBadField(problem.field);
         return;
       }
     }
-    const last = stepIdx === STEPS.length - 1;
-    const imperial = heightUnit === "ft";
-    const bodyFilled = !skip && step === "fit" && showBody && BODY_FIELDS.some((f) => body[f.key].trim() !== "");
-    if (bodyFilled && !bodyConsent) {
-      setError("To save measurements, please tick the box to agree — or clear them.");
+    const bodyTyped = showBody && BODY_FIELDS.some((f) => body[f.key].text.trim() !== "");
+    // Measurements are sent ONLY while the box is ticked; unticking already
+    // withdrew (see onConsentChange), so consent is never re-recorded here.
+    const bodyFilled = !skip && step === "fit" && bodyConsent && bodyTyped;
+    if (!skip && step === "fit" && bodyConsent && !bodyTyped && bodyOnServer && showBody) {
+      setError("To remove your measurements, untick the box above them.");
       return;
     }
     setBusy(true);
     try {
+      const fields = skip && step !== "about" ? {} : fieldsFor(step);
       if (bodyFilled) {
         const m: Measurements = {
-          weight_kg: toStored("weight_kg", body.weight_kg, imperial),
-          chest_cm: toStored("chest_cm", body.chest_cm, imperial),
-          waist_cm: toStored("waist_cm", body.waist_cm, imperial),
-          hips_cm: toStored("hips_cm", body.hips_cm, imperial),
-          inseam_cm: toStored("inseam_cm", body.inseam_cm, imperial),
+          weight_kg: storedValue(body.weight_kg),
+          chest_cm: storedValue(body.chest_cm),
+          waist_cm: storedValue(body.waist_cm),
+          hips_cm: storedValue(body.hips_cm),
+          inseam_cm: storedValue(body.inseam_cm),
+          shoulder_cm: storedValue(body.shoulder_cm),
           units: imperial ? "imperial" : "metric",
         };
-        await saveMeasurements(m);
-      }
-      const fields = skip && step !== "about" ? {} : fieldsFor(step);
-      if (Object.keys(fields).length > 0 || last) {
-        await saveProfile(fields, last);
+        // Height and measurements together: one history entry.
+        await saveProfileAndMeasurements(fields, m, completed);
+        setBodyOnServer(true);
+      } else if (Object.keys(fields).length > 0 || completed) {
+        await saveProfile(fields, completed);
       }
       track("onboarding_step", { step, skipped: skip, editing });
       if (last) {
-        if (!editing) track("onboarding_done");
+        if (!editing && completed) track("onboarding_done");
         onDone();
         return;
       }
       setStepIdx((i) => i + 1);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Couldn't save — check your connection and try again.");
+      if (e instanceof ApiError && e.field && e.field in LABELS) {
+        // The server names the field: same text and range as the form, in the user's units.
+        const f = e.field as RangeKey;
+        setError(rangeError(f, imperial));
+        setBadField(f);
+      } else {
+        setError(e instanceof ApiError ? e.message : "Couldn't save — check your connection and try again.");
+      }
     } finally {
       setBusy(false);
     }
@@ -397,39 +531,57 @@ export function Onboarding({
             your stylist.
           </p>
           <div className="space-y-2">
-            <Label hint="Optional — helps with proportions and lengths">Height</Label>
-            <div className="flex gap-2 items-center">
+            <div className="flex items-center gap-2">
+              <Label>Height</Label>
+              <InfoButton
+                id="height_cm"
+                label="Height"
+                open={openInfo === "height_cm"}
+                onToggle={() => toggleInfo("height_cm")}
+              />
+            </div>
+            {openInfo === "height_cm" && <InfoText id="height_cm">{helpText("height_cm", heightUnit === "ft")}</InfoText>}
+            <div className="flex gap-2 items-center flex-wrap">
               {heightUnit === "ft" ? (
                 <>
-                  <input
-                    inputMode="numeric"
-                    value={ft}
-                    onChange={(e) => setFt(e.target.value.replace(/\D/g, "").slice(0, 1))}
-                    placeholder="ft"
-                    className="w-20 px-3 py-2.5 rounded-xl text-sm focus:outline-none"
-                    style={inputStyle}
-                  />
-                  <input
-                    inputMode="numeric"
-                    value={inch}
-                    onChange={(e) => setInch(e.target.value.replace(/\D/g, "").slice(0, 2))}
-                    placeholder="in"
-                    className="w-20 px-3 py-2.5 rounded-xl text-sm focus:outline-none"
-                    style={inputStyle}
-                  />
+                  <span className="flex items-center gap-1.5">
+                    <input
+                      inputMode="numeric"
+                      aria-label="Height, feet"
+                      value={height.ft}
+                      onChange={(e) => setHeight(heightFromTypedFtIn(e.target.value.replace(/\D/g, "").slice(0, 1), height.inch))}
+                      className="w-14 px-3 py-2.5 rounded-xl text-sm focus:outline-none"
+                      style={badField === "height_cm" ? errorBorder : inputStyle}
+                    />
+                    <span className="text-sm" style={{ color: "var(--mid-grey)" }}>ft</span>
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <input
+                      inputMode="numeric"
+                      aria-label="Height, inches"
+                      value={height.inch}
+                      onChange={(e) => setHeight(heightFromTypedFtIn(height.ft, e.target.value.replace(/\D/g, "").slice(0, 2)))}
+                      className="w-14 px-3 py-2.5 rounded-xl text-sm focus:outline-none"
+                      style={badField === "height_cm" ? errorBorder : inputStyle}
+                    />
+                    <span className="text-sm" style={{ color: "var(--mid-grey)" }}>in</span>
+                  </span>
                 </>
               ) : (
-                <input
-                  inputMode="numeric"
-                  value={cm}
-                  onChange={(e) => setCm(e.target.value.replace(/\D/g, "").slice(0, 3))}
-                  placeholder="cm"
-                  className="w-24 px-3 py-2.5 rounded-xl text-sm focus:outline-none"
-                  style={inputStyle}
-                />
+                <span className="flex items-center gap-1.5">
+                  <input
+                    inputMode="numeric"
+                    aria-label="Height, cm"
+                    value={height.cm}
+                    onChange={(e) => setHeight(heightFromTypedCm(e.target.value.replace(/\D/g, "").slice(0, 3)))}
+                    className="w-20 px-3 py-2.5 rounded-xl text-sm focus:outline-none"
+                    style={badField === "height_cm" ? errorBorder : inputStyle}
+                  />
+                  <span className="text-sm" style={{ color: "var(--mid-grey)" }}>cm</span>
+                </span>
               )}
-              <TextLink onClick={() => setHeightUnit(heightUnit === "ft" ? "cm" : "ft")}>
-                {heightUnit === "ft" ? "Use cm" : "Use ft / in"}
+              <TextLink onClick={switchUnits}>
+                {heightUnit === "ft" ? "Use cm / kg" : "Use ft / in / lb"}
               </TextLink>
             </div>
           </div>
@@ -445,29 +597,12 @@ export function Onboarding({
               </div>
             ) : (
               <div className="space-y-2.5">
-                <div className="grid grid-cols-2 gap-2">
-                  {BODY_FIELDS.map((f) => (
-                    <label key={f.key} className="text-xs space-y-1" style={{ color: "var(--mid-grey)" }}>
-                      <span>
-                        {f.label} ({heightUnit === "ft" ? f.imperial : f.metric})
-                      </span>
-                      <input
-                        inputMode="decimal"
-                        value={body[f.key]}
-                        onChange={(e) =>
-                          setBody((prev) => ({ ...prev, [f.key]: e.target.value.replace(/[^0-9.,]/g, "").slice(0, 5) }))
-                        }
-                        className="w-full px-3 py-2.5 rounded-xl text-sm focus:outline-none"
-                        style={inputStyle}
-                      />
-                    </label>
-                  ))}
-                </div>
                 <label className="flex items-start gap-2.5 text-xs leading-relaxed" style={{ color: "var(--ink)" }}>
                   <input
                     type="checkbox"
                     checked={bodyConsent}
-                    onChange={(e) => setBodyConsent(e.target.checked)}
+                    disabled={busy}
+                    onChange={(e) => void onConsentChange(e.target.checked)}
                     className="w-4 h-4 mt-0.5"
                   />
                   <span>
@@ -476,6 +611,52 @@ export function Onboarding({
                     in Settings.
                   </span>
                 </label>
+                {!bodyConsent && (
+                  <p className="text-xs" style={{ color: "var(--mid-grey)" }}>
+                    Measurements are off. Tick the box to add them.
+                  </p>
+                )}
+                <div className="grid grid-cols-2 gap-2">
+                  {BODY_FIELDS.map((f) => {
+                    const unit = heightUnit === "ft" ? f.imperial : f.metric;
+                    return (
+                      <div key={f.key} className="text-xs space-y-1" style={{ color: "var(--mid-grey)" }}>
+                        <div className="flex items-center gap-1.5">
+                          <label htmlFor={"m-" + f.key}>
+                            {f.label} ({unit})
+                          </label>
+                          <InfoButton
+                            id={f.key}
+                            label={f.label}
+                            open={openInfo === f.key}
+                            onToggle={() => toggleInfo(f.key)}
+                          />
+                        </div>
+                        <span className="flex items-center gap-1.5">
+                          <input
+                            id={"m-" + f.key}
+                            inputMode="decimal"
+                            value={body[f.key].text}
+                            onChange={(e) => {
+                              const typed = e.target.value.replace(/[^0-9.,]/g, "").slice(0, 5);
+                              setBody((prev) => ({ ...prev, [f.key]: fieldFromTyped(f.key, typed, heightUnit === "ft") }));
+                            }}
+                            aria-invalid={badField === f.key}
+                            // Inactive (greyed) while the box is unticked: nothing can be typed or saved.
+                            disabled={!bodyConsent}
+                            className="w-full min-w-0 px-3 py-2.5 rounded-xl text-sm focus:outline-none"
+                            style={{
+                              ...(badField === f.key ? errorBorder : inputStyle),
+                              ...(bodyConsent ? {} : { background: "var(--warm-grey)", opacity: 0.5 }),
+                            }}
+                          />
+                          <span className="text-sm w-5 shrink-0">{unit}</span>
+                        </span>
+                        {openInfo === f.key && <InfoText id={f.key}>{helpText(f.key, heightUnit === "ft")}</InfoText>}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
@@ -542,17 +723,27 @@ export function Onboarding({
 
       <div className="space-y-3">
         <Primary onClick={() => next(false)} disabled={busy}>
-          {busy ? "Saving…" : stepIdx === STEPS.length - 1 ? (editing ? "Save" : "Finish") : "Next"}
+          {busy
+            ? "Saving…"
+            : single
+              ? "Save"
+              : stepIdx === STEPS.length - 1
+                ? editing
+                  ? "Save"
+                  : "Finish"
+                : "Next"}
         </Primary>
         <div className="flex items-center justify-between">
-          {stepIdx > 0 ? (
+          {single && onCancel ? (
+            <TextLink onClick={onCancel}>Cancel</TextLink>
+          ) : stepIdx > 0 ? (
             <TextLink onClick={() => setStepIdx((i) => i - 1)}>Back</TextLink>
           ) : editing && onCancel ? (
             <TextLink onClick={onCancel}>Cancel</TextLink>
           ) : (
             <span />
           )}
-          {step !== "about" && <TextLink onClick={() => next(true)}>Skip</TextLink>}
+          {step !== "about" && !single && <TextLink onClick={() => next(true)}>Skip</TextLink>}
         </div>
       </div>
     </Page>

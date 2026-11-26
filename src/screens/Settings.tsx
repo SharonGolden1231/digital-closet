@@ -1,28 +1,49 @@
 import { useState } from "react";
 import { Card, Label, Primary, Secondary, ErrorNote, inputStyle } from "./ui";
-import { STYLES, GOALS, WEEKDAYS, SHOPS_FOR, BRAND_TIERS, labelOf } from "./options";
+import { STYLES, GOALS, WEEKDAYS, SHOPS_FOR, BRAND_TIERS, FIT_ISSUES, labelOf, cmToFeetInches } from "./options";
 import { requestDeletion, setConsent, deleteMeasurements, ApiError } from "../lib/account";
 import type { AccountStatus, StyleProfile, Measurements } from "../lib/account";
+import type { Step } from "./Onboarding";
 import { track } from "../lib/track";
 import { ChangePassword } from "./PasswordScreens";
 
 // Settings: style answers, My invites, AI consent, delete account, sign out.
+// Every answer can be changed later, also the ones skipped in the intro:
+// each row opens its own intro screen.
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value, onEdit }: { label: string; value: string; onEdit?: () => void }) {
   return (
-    <div className="flex justify-between gap-4 text-sm">
+    <div className="flex justify-between items-baseline gap-4 text-sm">
       <span style={{ color: "var(--mid-grey)" }}>{label}</span>
       <span className="text-right" style={{ color: "var(--ink)" }}>
         {value || "—"}
+        {onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="ml-2 text-xs underline"
+            style={{ color: "var(--emerald)" }}
+            aria-label={(value ? "Change " : "Add ") + label}
+          >
+            {value ? "Change" : "Add"}
+          </button>
+        )}
       </span>
     </div>
   );
+}
+
+function heightText(cm: number | null): string {
+  if (!cm) return "";
+  const fi = cmToFeetInches(cm);
+  return `${cm} cm (${fi.ft}′${fi.inch}″)`;
 }
 
 export function Settings({
   account,
   profile,
   measurements,
+  bodyConsent = false,
   onMeasurementsDeleted,
   onEditAnswers,
   onConsentWithdrawn,
@@ -32,8 +53,11 @@ export function Settings({
   account: AccountStatus;
   profile: StyleProfile | null;
   measurements: Measurements | null;
+  // The measurements consent is granted (history may exist even without current values).
+  bodyConsent?: boolean;
   onMeasurementsDeleted: () => void;
-  onEditAnswers: () => void;
+  // No step: walk through all intro screens; a step: open that screen only.
+  onEditAnswers: (step?: Step) => void;
   onConsentWithdrawn: () => void;
   onDeletionRequested: () => void;
   onSignOut: () => void;
@@ -74,7 +98,8 @@ export function Settings({
 
   const removeMeasurements = async () => {
     if (busy) return;
-    if (!window.confirm("Delete your body measurements? You can add them again later.")) return;
+    // Withdraws the measurements consent: deletes current values AND history.
+    if (!window.confirm("This deletes your measurements and their history. Continue?")) return;
     setBusy(true);
     setError("");
     try {
@@ -109,30 +134,53 @@ export function Settings({
         <Label>Your style answers</Label>
         {profile ? (
           <div className="space-y-1.5">
-            <Row label="Name" value={profile.first_name ?? ""} />
-            <Row label="Shop" value={profile.shops_for ? labelOf(SHOPS_FOR, profile.shops_for) : ""} />
-            <Row label="Weekdays" value={list(profile.weekdays, WEEKDAYS)} />
-            <Row label="Style" value={list(profile.style_now, STYLES)} />
-            <Row label="Style icon" value={profile.style_icon ?? ""} />
-            <Row label="Goals" value={list(profile.goals, GOALS)} />
-            <Row label="Brands" value={[list(profile.brand_tiers, BRAND_TIERS), profile.brands.join(", ")].filter(Boolean).join(" · ")} />
+            <Row label="Name" value={profile.first_name ?? ""} onEdit={() => onEditAnswers("about")} />
+            <Row
+              label="Shop"
+              value={profile.shops_for ? labelOf(SHOPS_FOR, profile.shops_for) : ""}
+              onEdit={() => onEditAnswers("shop")}
+            />
+            <Row label="Weekdays" value={list(profile.weekdays, WEEKDAYS)} onEdit={() => onEditAnswers("week")} />
+            <Row label="Style" value={list(profile.style_now, STYLES)} onEdit={() => onEditAnswers("style")} />
+            <Row label="Style icon" value={profile.style_icon ?? ""} onEdit={() => onEditAnswers("style")} />
+            <Row label="Goals" value={list(profile.goals, GOALS)} onEdit={() => onEditAnswers("goals")} />
+            <Row
+              label="Brands"
+              value={[list(profile.brand_tiers, BRAND_TIERS), profile.brands.join(", ")].filter(Boolean).join(" · ")}
+              onEdit={() => onEditAnswers("brands")}
+            />
+            <Row label="Height" value={heightText(profile.height_cm)} onEdit={() => onEditAnswers("fit")} />
+            <Row label="Fit" value={list(profile.fit_issues, FIT_ISSUES)} onEdit={() => onEditAnswers("fit")} />
+            <Row
+              label="Colours"
+              value={[
+                profile.colors_love.length ? "Love: " + profile.colors_love.join(", ") : "",
+                profile.colors_avoid.length ? "Avoid: " + profile.colors_avoid.join(", ") : "",
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              onEdit={() => onEditAnswers("fit")}
+            />
           </div>
         ) : (
           <p className="text-sm" style={{ color: "var(--mid-grey)" }}>
             Not answered yet.
           </p>
         )}
-        <Secondary onClick={onEditAnswers}>Edit answers</Secondary>
+        <Secondary onClick={() => onEditAnswers()}>Go through all questions</Secondary>
       </Card>
 
       <Card>
         <Label hint="Private to you. Never shared.">Body measurements</Label>
         <p className="text-sm" style={{ color: "var(--ink)" }}>
-          {measurements ? "Saved." : "Not added. You can add them under Edit answers."}
+          {measurements ? "Saved." : "Not added."}
         </p>
-        {measurements && (
+        <Secondary onClick={() => onEditAnswers("fit")} disabled={busy}>
+          {measurements ? "Change measurements" : "Add measurements"}
+        </Secondary>
+        {(measurements || bodyConsent) && (
           <Secondary onClick={removeMeasurements} disabled={busy}>
-            Delete my measurements
+            Remove my measurements
           </Secondary>
         )}
       </Card>
