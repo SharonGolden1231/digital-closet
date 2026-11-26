@@ -7,6 +7,10 @@ import { userClient, COLOR_HEX } from "./_lib/closet.js";
 //   POST {answers, completed?: boolean}       -> save answers (partial allowed)
 //   POST {measurements: {...}, bodyConsent: true} -> record consent, save numbers
 //   POST {measurements: null}                 -> withdraw consent and DELETE them
+//                                                (current values AND history)
+// Each measurement save, and each height change, adds a dated entry to
+// body_measurement_entries (consent required, duplicates skipped). The
+// history is stored only; it is never returned to the app.
 // Everything runs AS THE USER: row-level security only ever lets people read
 // and write their own row. Values are checked here AND by the database.
 
@@ -39,9 +43,57 @@ const BODY_FIELDS: Record<string, [number, number]> = {
   waist_cm: [40, 200],
   hips_cm: [50, 220],
   inseam_cm: [40, 120],
+  shoulder_cm: [30, 70],
 };
+const BODY_COLUMNS = "weight_kg, chest_cm, waist_cm, hips_cm, inseam_cm, shoulder_cm, units";
+// One dated history entry = a snapshot of the user's current body values.
+// Height comes from style_profiles (the ONE home of the user's height);
+// body_measurements.height_cm is deliberately never written.
+const ENTRY_FIELDS = ["height_cm", ...Object.keys(BODY_FIELDS)];
 
 class Invalid extends Error {}
+
+const sameNumber = (a: unknown, b: unknown) =>
+  (a === null || a === undefined) && (b === null || b === undefined)
+    ? true
+    : a !== null && a !== undefined && b !== null && b !== undefined && Number(a) === Number(b);
+
+// Adds one entry to body_measurement_entries with the user's current values,
+// unless the body-measurements consent is not granted, nothing is filled in,
+// or the values equal the latest entry (no duplicates). Returns an error
+// message for the log, or null when done or skipped.
+async function recordEntry(db: any, userId: string): Promise<string | null> {
+  const [consent, style, body, latest] = await Promise.all([
+    db
+      .from("consent_records")
+      .select("granted")
+      .eq("consent_type", "body_measurements")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    db.from("style_profiles").select("height_cm").eq("user_id", userId).maybeSingle(),
+    db.from("body_measurements").select(BODY_COLUMNS).eq("user_id", userId).maybeSingle(),
+    db
+      .from("body_measurement_entries")
+      .select(ENTRY_FIELDS.join(", "))
+      .eq("user_id", userId)
+      .order("measured_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  const err = consent.error || style.error || body.error || latest.error;
+  if (err) return err.message;
+  if ((consent.data as any)?.granted !== true) return null;
+
+  const entry: Record<string, unknown> = { user_id: userId };
+  entry.height_cm = (style.data as any)?.height_cm ?? null;
+  for (const f of Object.keys(BODY_FIELDS)) entry[f] = (body.data as any)?.[f] ?? null;
+  if (ENTRY_FIELDS.every((f) => entry[f] === null)) return null;
+  if (latest.data && ENTRY_FIELDS.every((f) => sameNumber(entry[f], (latest.data as any)[f]))) return null;
+
+  const { error } = await db.from("body_measurement_entries").insert(entry);
+  return error ? `${error.code} ${error.message}` : null;
+}
 
 // Body numbers arrive in kg / cm (the app converts). Empty means "not given".
 export function buildMeasurements(m: any): Record<string, unknown> {
@@ -163,7 +215,7 @@ export default async function handler(req: any, res: any) {
         db.from("profiles").select("is_admin").eq("id", auth.userId).maybeSingle(),
         db
           .from("body_measurements")
-          .select("weight_kg, chest_cm, waist_cm, hips_cm, inseam_cm, units")
+          .select(BODY_COLUMNS)
           .eq("user_id", auth.userId)
           .maybeSingle(),
         db
@@ -207,9 +259,13 @@ export default async function handler(req: any, res: any) {
           console.error("body consent withdraw failed:", cErr.message);
           return res.status(500).json({ error: "Couldn't save your choice." });
         }
-        const { error: dErr } = await db.from("body_measurements").delete().eq("user_id", auth.userId);
+        const [hist, cur] = await Promise.all([
+          db.from("body_measurement_entries").delete().eq("user_id", auth.userId),
+          db.from("body_measurements").delete().eq("user_id", auth.userId),
+        ]);
+        const dErr = hist.error || cur.error;
         if (dErr) {
-          console.error("body delete failed:", dErr.message);
+          console.error("body delete failed:", hist.error?.message, cur.error?.message);
           return res.status(500).json({ error: "Couldn't delete your measurements." });
         }
         return res.status(200).json({ ok: true });
@@ -240,6 +296,12 @@ export default async function handler(req: any, res: any) {
         .upsert({ user_id: auth.userId, ...m }, { onConflict: "user_id" });
       if (bErr) {
         console.error("body save failed:", bErr.code, bErr.message);
+        return res.status(500).json({ error: "Couldn't save your measurements." });
+      }
+      // Saving again is safe: an unchanged snapshot adds no second entry.
+      const hErr = await recordEntry(db, auth.userId);
+      if (hErr) {
+        console.error("body history failed:", hErr);
         return res.status(500).json({ error: "Couldn't save your measurements." });
       }
       return res.status(200).json({ ok: true });
@@ -274,6 +336,15 @@ export default async function handler(req: any, res: any) {
     if (error) {
       console.error("profile save failed:", error.code, error.message);
       return res.status(500).json({ error: "Couldn't save your answers." });
+    }
+    // A height change is part of the measurement history (only with the
+    // body-measurements consent; unchanged values add nothing).
+    if (Object.prototype.hasOwnProperty.call(row, "height_cm")) {
+      const hErr = await recordEntry(db, auth.userId);
+      if (hErr) {
+        console.error("height history failed:", hErr);
+        return res.status(500).json({ error: "Couldn't save your answers." });
+      }
     }
     return res.status(200).json({ ok: true });
   } catch (error: any) {
